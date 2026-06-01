@@ -1,0 +1,78 @@
+:root {
+  --color-bg: #F9F6F2;
+  --color-sidebar: #F3EDE6;
+  --color-surface: #FFFFFF;
+  --color-surface-hover: #F7F3ED;
+  --color-text: #2D2420;
+  --color-text-dim: #7A6E64;
+  --color-text-muted: #B0A59A;
+  --color-accent: #D4785C;
+  --color-accent-hover: #C0684C;
+  --color-accent-subtle: rgba(212, 120, 92, 0.08);
+  --color-accent-glow: rgba(212, 120, 92, 0.16);
+  --color-user-bubble: #EDE4D8;
+  --color-assistant-bubble: #FFFCF9;
+  --color-border: #E8E0D6;
+  --color-danger: #C94A4A;
+  --color-danger-hover: #B03A3A;
+  --color-success: #5A9E6F;
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
+  --radius-full: 9999px;
+  --shadow-xs: 0 1px 2px rgba(45, 36, 32, 0.04);
+  --shadow-sm: 0 1px 3px rgba(45, 36, 32, 0.06), 0 1px 2px rgba(45, 36, 32, 0.04);
+  --shadow-md: 0 4px 12px rgba(45, 36, 32, 0.06), 0 2px 4px rgba(45, 36, 32, 0.04);
+  --shadow-lg: 0 8px 24px rgba(45, 36, 32, 0.08), 0 2px 8px rgba(45, 36, 32, 0.04);
+  --shadow-xl: 0 16px 40px rgba(45, 36, 32, 0.1), 0 4px 12px rgba(45, 36, 32, 0.06);
+  --font-body: 'Segoe UI', 'SF Pro Display', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --font-mono: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out: cubic-bezier(0, 0, 0.2, 1);
+  --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font-body);
+  color: var(--color-text);
+  background: var(--color-bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  line-height: 1.6;
+}
+
+input, textarea, button, select {
+  font-family: inherit;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  background: none;
+}
+
+::-webkit-scrollbar {
+  width: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-muted);
+}

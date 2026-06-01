@@ -1,0 +1,138 @@
+.bubble-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  margin: 6px 0;
+  padding: 0 32px;
+}
+
+.bubble-row--user {
+  justify-content: flex-end;
+}
+
+.bubble-row--assistant {
+  justify-content: flex-start;
+}
+
+.bubble-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.bubble-avatar--assistant {
+  background: linear-gradient(135deg, #E8A87C, #D4785C);
+  color: #fff;
+}
+
+.bubble-avatar--user {
+  background: linear-gradient(135deg, #B8C9A8, #8FAF7E);
+  color: #fff;
+}
+
+.bubble {
+  max-width: 68%;
+  padding: 12px 18px;
+  border-radius: var(--radius-lg);
+  font-size: 15px;
+  line-height: 1.65;
+  word-wrap: break-word;
+  word-break: break-word;
+  position: relative;
+  animation: bubbleIn 0.4s var(--ease-bounce);
+  transition: box-shadow 0.3s var(--ease-out);
+}
+
+@keyframes bubbleIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.bubble--user {
+  background: var(--color-user-bubble);
+  color: #2D2420;
+  border-bottom-right-radius: 6px;
+}
+
+.bubble--assistant {
+  background: var(--color-assistant-bubble);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  box-shadow: var(--shadow-xs);
+  border-bottom-left-radius: 6px;
+}
+
+.bubble p {
+  margin: 0;
+}
+
+.bubble p + p {
+  margin-top: 10px;
+}
+
+.bubble code {
+  background: rgba(0, 0, 0, 0.05);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: var(--font-mono);
+}
+
+.bubble pre {
+  background: #F5F0EB;
+  padding: 12px 16px;
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  margin: 8px 0;
+}
+
+.bubble pre code {
+  background: none;
+  padding: 0;
+}
+
+.bubble ul, .bubble ol {
+  padding-left: 20px;
+  margin: 6px 0;
+}
+
+.bubble li {
+  margin: 2px 0;
+}
+
+.bubble strong {
+  font-weight: 700;
+}
+
+.bubble-image {
+  max-width: 240px;
+  max-height: 240px;
+  border-radius: var(--radius-md);
+  display: block;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.bubble-image:hover {
+  opacity: 0.9;
+}
+
+.bubble--has-image {
+  padding: 4px;
+}
+
+.bubble--has-image .bubble-text {
+  padding: 8px 14px 4px;
+}

@@ -1,0 +1,51 @@
+# 环境变量 & 密钥
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+.pytest_cache/
+
+# 虚拟环境
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 前端
+frontend/dist/
+frontend/node_modules/
+frontend/package-lock.json
+frontend/tsconfig.app.tsbuildinfo
+frontend/tsconfig.node.tsbuildinfo
+
+# 本地数据（含用户隐私，不入版本控制）
+backend/memory_store/
+backend/conversations/
+backend/mem0_local_db/
+
+# 自定义人设配置（含用户个性化 Prompt）
+backend/prompt_config.json
+
+# SQLite 数据库
+*.db
+*.db-shm
+*.db-wal
+
+# Streamlit 遗留配置
+.streamlit/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini

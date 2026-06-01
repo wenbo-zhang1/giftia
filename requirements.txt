@@ -1,0 +1,10 @@
+langchain-openai>=0.1.0
+langchain-core>=0.1.0
+langgraph>=0.0.20
+mem0ai>=0.1.0
+fastapi>=0.104.0
+uvicorn>=0.24.0
+python-multipart>=0.0.6
+sse-starlette>=1.8.0
+python-dotenv>=1.0.0
+Pillow>=10.0.0
