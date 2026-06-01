@@ -1,7 +1,7 @@
 langchain-openai>=0.1.0
 langchain-core>=0.1.0
 langgraph>=0.0.20
-mem0ai>=0.1.0
+mem0ai>=2.0.4
 fastapi>=0.104.0
 uvicorn>=0.24.0
 python-multipart>=0.0.6
