@@ -120,7 +120,7 @@ def _log_startup_summary():
     features.append(f"Chat: {CHAT_MODEL} (key: {'已配置' if CHAT_API_KEY else '未配置'})")
     features.append(f"记忆: {'Mem0 云端' if MEM0_API_KEY else '仅本地'}")
     features.append(f"多模态: {'支持' if _app_state.get('multimodal') else '不支持'}")
-    features.append(f"认证: {'已启用' if XIAOYI_ACCESS_KEY else '未启用'}")
+    features.append(f"认证: {'已启用' if GIFTIA_ACCESS_KEY else '未启用'}")
     logger.info("启动配置摘要: " + " | ".join(features))
 
 @asynccontextmanager
