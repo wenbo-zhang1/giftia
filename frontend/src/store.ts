@@ -228,10 +228,12 @@ export const useStore = create<AppState>((set, get) => ({
     const { userId, currentConvId, messages } = get()
     set({ isLoading: true, statusText: '', error: null, lastFailedMessage: { content, imageData } })
 
-    const userMsg: Message = { id: nextMsgId(), role: 'user', content, image: imageData || undefined }
+    const userMsgId = nextMsgId()
+    const userMsg: Message = { id: userMsgId, role: 'user', content, image: imageData || undefined }
     set((s) => ({ messages: [...s.messages, userMsg] }))
 
-    let assistantMsg: Message = { id: nextMsgId(), role: 'assistant', content: '' }
+    const assistantMsgId = nextMsgId()
+    let assistantMsg: Message = { id: assistantMsgId, role: 'assistant', content: '' }
     let assistantAdded = false
 
     try {
@@ -240,27 +242,44 @@ export const useStore = create<AppState>((set, get) => ({
         if (event.type === 'status') {
           set({ statusText: event.text || '' })
         } else if (event.type === 'token') {
-          if (!assistantAdded) {
-            assistantAdded = true
-            set((s) => ({ messages: [...s.messages, assistantMsg], isLoading: false, statusText: '' }))
-          }
+          // 累积 token 内容
           assistantMsg = { ...assistantMsg, content: assistantMsg.content + (event.text || '') }
-          set((s) => ({
-            messages: [...s.messages.slice(0, -1), assistantMsg],
-          }))
-        } else if (event.type === 'reply') {
-          const finalContent = event.text || assistantMsg.content
+          
           if (!assistantAdded) {
+            // 第一次收到 token，添加 assistant 消息
             assistantAdded = true
-            const reply: Message = { role: 'assistant', content: finalContent }
-            set((s) => ({ messages: [...s.messages, reply], isLoading: false, statusText: '' }))
-          } else {
-            assistantMsg = { ...assistantMsg, content: finalContent }
-            set((s) => ({
-              messages: [...s.messages.slice(0, -1), assistantMsg],
-              isLoading: false,
-              statusText: '',
+            set((s) => ({ 
+              messages: [...s.messages, assistantMsg], 
+              isLoading: false, 
+              statusText: '' 
             }))
+          } else {
+            // 后续 token，更新已存在的 assistant 消息
+            set((s) => {
+              const msgIndex = s.messages.findIndex(m => m.id === assistantMsgId)
+              if (msgIndex === -1) {
+                // 如果找不到，追加到末尾（异常情况）
+                return { messages: [...s.messages, assistantMsg] }
+              }
+              const newMessages = [...s.messages]
+              newMessages[msgIndex] = assistantMsg
+              return { messages: newMessages }
+            })
+          }
+        } else if (event.type === 'reply') {
+          // 收到完整回复，更新消息内容（只在 assistantAdded=true 时执行）
+          if (assistantAdded) {
+            const finalContent = event.text || assistantMsg.content
+            assistantMsg = { ...assistantMsg, content: finalContent }
+            set((s) => {
+              const msgIndex = s.messages.findIndex(m => m.id === assistantMsgId)
+              if (msgIndex === -1) {
+                return { messages: [...s.messages, assistantMsg] }
+              }
+              const newMessages = [...s.messages]
+              newMessages[msgIndex] = assistantMsg
+              return { messages: newMessages }
+            })
           }
         } else if (event.type === 'done') {
           if (event.conversation_id && !currentConvId) {
@@ -282,11 +301,15 @@ export const useStore = create<AppState>((set, get) => ({
       if (!assistantAdded) {
         set((s) => ({ messages: [...s.messages, errMsg], isLoading: false, statusText: '' }))
       } else {
-        set((s) => ({
-          messages: [...s.messages.slice(0, -1), errMsg],
-          isLoading: false,
-          statusText: '',
-        }))
+        set((s) => {
+          const msgIndex = s.messages.findIndex(m => m.id === assistantMsgId)
+          if (msgIndex === -1) {
+            return { messages: [...s.messages, errMsg], isLoading: false, statusText: '' }
+          }
+          const newMessages = [...s.messages]
+          newMessages[msgIndex] = errMsg
+          return { messages: newMessages, isLoading: false, statusText: '' }
+        })
       }
     }
   },
