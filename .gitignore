@@ -30,9 +30,12 @@ frontend/tsconfig.app.tsbuildinfo
 frontend/tsconfig.node.tsbuildinfo
 
 # 本地数据（含用户隐私，不入版本控制）
-backend/memory_store/
-backend/conversations/
-backend/mem0_local_db/
+backend/memory_store/*
+!backend/memory_store/.gitkeep
+backend/conversations/*
+!backend/conversations/.gitkeep
+backend/mem0_local_db/*
+!backend/mem0_local_db/.gitkeep
 
 # 自定义人设配置（含用户个性化 Prompt）
 backend/prompt_config.json
