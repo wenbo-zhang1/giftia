@@ -1,6 +1,6 @@
-# 贡献指南 — 小忆 (XiaoYi)
+# 贡献指南 — 吉芙提尔 (giftia)
 
-感谢你对 **小忆 (XiaoYi)** 的关注！小忆是一个 AI 情感陪伴助手，拥有基于艾宾浩斯遗忘曲线的长期记忆系统。我们欢迎一切形式的贡献：Bug 报告、功能建议、代码提交、文档改进。
+感谢你对 **吉芙提尔 (giftia)** 的关注！吉芙提尔是一个 AI 情感陪伴助手，拥有基于艾宾浩斯遗忘曲线的长期记忆系统。我们欢迎一切形式的贡献：Bug 报告、功能建议、代码提交、文档改进。
 
 ---
 
@@ -16,8 +16,8 @@
 ### 克隆与安装
 
 ```bash
-git clone https://github.com/wenbo-zhang1/xiaoyi.git
-cd xiaoyi
+git clone https://github.com/wenbo-zhang1/giftia.git
+cd Giftia
 ```
 
 **后端依赖：**
@@ -176,8 +176,8 @@ refactor: 抽取记忆评分逻辑为独立模块
 
 ## 问题反馈
 
-- **Bug 报告**：使用 [Bug Report](https://github.com/wenbo-zhang1/xiaoyi/issues/new?template=bug_report.md) 模板
-- **功能建议**：使用 [Feature Request](https://github.com/wenbo-zhang1/xiaoyi/issues/new?template=feature_request.md) 模板
+- **Bug 报告**：使用 [Bug Report](https://github.com/wenbo-zhang1/giftia/issues/new?template=bug_report.md) 模板
+- **功能建议**：使用 [Feature Request](https://github.com/wenbo-zhang1/giftia/issues/new?template=feature_request.md) 模板
 
 ---
 
@@ -189,4 +189,4 @@ refactor: 抽取记忆评分逻辑为独立模块
 
 ## 许可证
 
-小忆 (XiaoYi) 使用 [MIT License](./LICENSE) 开源。你贡献的代码也将以 MIT License 发布。
+吉芙提尔 (giftia) 使用 [MIT License](./LICENSE) 开源。你贡献的代码也将以 MIT License 发布。
