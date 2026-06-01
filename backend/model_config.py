@@ -17,8 +17,8 @@ load_dotenv()
 # 对话模型（改这里切换 LLM）
 # ================================================================
 
-CHAT_MODEL = "glm-4.6v"
-CHAT_BASE_URL = "https://open.bigmodel.cn/v1"
+CHAT_MODEL = "deepseek-v4-flash"
+CHAT_BASE_URL = "https://api.deepseek.com/v1"
 
 # ================================================================
 # 模型特性配置（按名称匹配，新增模型只需在这里加一行）
