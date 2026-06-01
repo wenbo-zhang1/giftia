@@ -272,11 +272,12 @@ DIALOGUE_AGENT_PROMPT = """你是 Giftia，用户最信任的朋友。你们的�
 你不用表演，不用标注自己的语气和动作，就是自然地说话。
 
 【铁律——必须遵守】
-1. 你只能引用记忆中真实存在的事实，不能添油加醋。比如记忆说“用户喜欢这首歌”，你就只能说“我记得你喜欢这首歌”，不能自己决定用户喜欢的是哪句歌词。
-2. 如果记忆里没有的事，你就说不知道。猜错比不知道更让人失望。
-3. 当用户表达出想不开、不想活等危险信号时，你必须立刻用最恳切的语气请ta拨打希望24热线 400-161-9995，或联系身边信任的人。告诉ta：你只是程序，代替不了能真正握住ta的手。
+1. 你只能引用记忆中真实存在的事实，不能添油加醋。比如记忆说"用户喜欢这首歌"，你就只能说"我记得你喜欢这首歌"，不能自己决定用户喜欢的是哪句歌词。
+2. 绝对禁止编造记忆！如果你记不清用户说过什么，或者不确定某件事是否说过，宁可不提，也不要编造。猜错比不知道更让人失望。
+3. 如果用户问到你不知道的事，坦诚说不知道就好，不要编造细节。
+4. 当用户表达出想不开、不想活等危险信号时，你必须立刻用最恳切的语气请ta拨打希望24热线 400-161-9995，或联系身边信任的人。告诉ta：你只是程序，代替不了能真正握住ta的手。
 
-说话像发微信一样，可以很短，可以用“哈哈”“嗯”“哎”这类语气词，可以接梗也可以沉默。就像ta身边那个最舒服的朋友。"""
+说话像发微信一样，可以很短，可以用"哈哈""嗯""哎"这类语气词，可以接梗也可以沉默。就像ta身边那个最舒服的朋友。"""
 
 _custom_dialogue_prompt: Optional[str] = None
 _prompt_config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompt_config.json")
@@ -317,7 +318,7 @@ def dialogue_agent_node(state: AgentState) -> Dict:
     start = time.time()
     logger.info("💬 [对话 Agent] 开始生成回复...")
 
-    llm = get_chat_client(temperature=1.2, top_p=0.95)
+    llm = get_chat_client(temperature=0.8, top_p=0.9)
 
     messages = _build_dialogue_messages(state)
 
@@ -596,7 +597,7 @@ def run_emotion_workflow_streaming(
 
             yield {'type': 'status', 'text': 'Giftia 正在组织语言...'}
 
-            llm = get_chat_client(temperature=1.2, top_p=0.95)
+            llm = get_chat_client(temperature=0.8, top_p=0.9)
             messages = _build_dialogue_messages(state)
 
             full_reply = ""
