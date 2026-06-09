@@ -55,7 +55,7 @@ jobs:
           cache-dependency-path: frontend/package.json
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install
 
       - name: Lint
         run: npm run lint
