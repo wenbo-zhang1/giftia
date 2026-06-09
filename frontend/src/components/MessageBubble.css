@@ -41,7 +41,7 @@
   padding: 12px 18px;
   border-radius: var(--radius-lg);
   font-size: 15px;
-  line-height: 1.65;
+  line-height: 1.4;
   word-wrap: break-word;
   word-break: break-word;
   position: relative;
@@ -76,10 +76,11 @@
 
 .bubble p {
   margin: 0;
+  line-height: 1.4;
 }
 
 .bubble p + p {
-  margin-top: 10px;
+  margin-top: 4px;
 }
 
 .bubble code {

@@ -23,6 +23,8 @@ def app():
     _app_state["mem0_bridge"] = MagicMock()
     _app_state["mem0_bridge"].mem0_client = None
     _app_state["multimodal"] = False
+    _app_state["working_memory_store"] = MagicMock()
+    _app_state["working_memory_store"].format_for_prompt.return_value = ""
     return app
 
 
@@ -98,6 +100,8 @@ class TestConfigEndpoints:
         data = response.json()
         assert data["ok"] is True
         assert "小猫" in data["prompt"]
+        # 清理：恢复默认 prompt，避免污染实际配置
+        client.put("/api/config/prompt", json={"prompt": ""})
 
 
 class TestUsersEndpoint:

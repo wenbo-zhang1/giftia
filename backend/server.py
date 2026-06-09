@@ -32,6 +32,7 @@ from llm_config import get_llm_client
 from model_config import CHAT_MODEL, CHAT_BASE_URL, get_mem0_api_key, get_chat_api_key, detect_provider, PROVIDER_KEY_MAP
 from mem0 import MemoryClient
 from memory_manager import MemoryManager, Mem0Bridge, EmotionType, MemoryCategory
+from working_memory import WorkingMemoryStore
 from emotion_graph import build_emotion_graph, run_emotion_workflow, run_emotion_workflow_streaming, load_prompt_config, save_prompt_config, get_dialogue_prompt, DIALOGUE_AGENT_PROMPT
 from file_processor import is_multimodal_model, image_to_base64_data_url
 from conversation_store import ConversationStore
@@ -80,6 +81,45 @@ class MemoryLogHandler(logging.Handler):
 _log_handler = MemoryLogHandler(maxlen=500)
 logging.getLogger().addHandler(_log_handler)
 logging.getLogger().setLevel(logging.INFO)
+
+# ================================================================
+# Metrics（可观测性）
+# ================================================================
+
+_metrics = {
+    "requests_total": defaultdict(int),       # endpoint -> count
+    "requests_errors": defaultdict(int),       # endpoint -> count
+    "requests_duration_sum": defaultdict(float),  # endpoint -> total seconds
+    "llm_calls_total": 0,
+    "llm_calls_duration_sum": 0.0,
+    "llm_tokens_total": 0,
+    "start_time": time.time(),
+}
+
+
+class MetricsMiddleware(BaseHTTPMiddleware):
+    """记录每个请求的耗时和状态码。"""
+
+    async def dispatch(self, request: Request, call_next):
+        start = time.time()
+        response = await call_next(request)
+        duration = time.time() - start
+
+        path = request.url.path
+        # 归一化带路径参数的端点
+        for prefix in ("/api/chat/", "/api/conversations/", "/api/memory/"):
+            if path.startswith(prefix):
+                parts = path[len(prefix):].strip("/").split("/")
+                if len(parts) >= 1:
+                    path = f"{prefix}{{id}}"
+                break
+
+        _metrics["requests_total"][path] += 1
+        _metrics["requests_duration_sum"][path] += duration
+        if response.status_code >= 400:
+            _metrics["requests_errors"][path] += 1
+
+        return response
 
 # ================================================================
 # 配置
@@ -131,6 +171,7 @@ async def lifespan(app: FastAPI):
     mm = MemoryManager(storage_path=os.path.join(os.path.dirname(__file__), "memory_store"))
     _app_state["memory_manager"] = mm
     _app_state["conversation_store"] = ConversationStore()
+    _app_state["working_memory_store"] = WorkingMemoryStore()
 
     mem0_client = None
     if MEM0_API_KEY:
@@ -143,7 +184,7 @@ async def lifespan(app: FastAPI):
     bridge = Mem0Bridge(memory_manager=mm, mem0_client=mem0_client)
     _app_state["mem0_bridge"] = bridge
 
-    graph = build_emotion_graph(memory_manager=mm, mem0_bridge=bridge)
+    graph = build_emotion_graph(memory_manager=mm, mem0_bridge=bridge, working_memory_store=_app_state["working_memory_store"])
     _app_state["emotion_graph"] = graph
 
     _app_state["multimodal"] = is_multimodal_model()
@@ -202,6 +243,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         return response
 
+app.add_middleware(MetricsMiddleware)
 app.add_middleware(RateLimitMiddleware)
 
 async def rate_limit_chat(user_id: str):
@@ -298,6 +340,7 @@ async def chat(user_id: str, req: ChatRequest):
                 user_message=req.message,
                 conversation_history=req.conversation_history,
                 image_data=req.image_data,
+                working_memory_store=_app_state.get("working_memory_store"),
             ):
                 chunk_type = chunk.get("type")
                 if chunk_type == "status":
@@ -491,6 +534,33 @@ async def clear_memories(user_id: str):
 @app.get("/api/logs", dependencies=[Depends(verify_admin_key)])
 async def get_logs(limit: int = Query(default=200, ge=1, le=500)):
     return {"logs": _log_handler.get_logs()[-limit:]}
+
+
+@app.get("/api/metrics", dependencies=[Depends(verify_admin_key)])
+async def get_metrics():
+    """返回服务指标（Prometheus 风格）。"""
+    uptime = time.time() - _metrics["start_time"]
+    endpoints = []
+    for path, count in _metrics["requests_total"].items():
+        errors = _metrics["requests_errors"].get(path, 0)
+        duration_sum = _metrics["requests_duration_sum"].get(path, 0.0)
+        avg_duration = duration_sum / count if count > 0 else 0
+        endpoints.append({
+            "path": path,
+            "requests_total": count,
+            "requests_errors": errors,
+            "avg_duration_ms": round(avg_duration * 1000, 1),
+        })
+    return {
+        "uptime_seconds": round(uptime, 0),
+        "endpoints": endpoints,
+        "llm": {
+            "calls_total": _metrics["llm_calls_total"],
+            "avg_duration_ms": round(
+                _metrics["llm_calls_duration_sum"] / _metrics["llm_calls_total"] * 1000, 1
+            ) if _metrics["llm_calls_total"] > 0 else 0,
+        },
+    }
 
 # ================================================================
 # API: 配置

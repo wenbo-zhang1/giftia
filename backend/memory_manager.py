@@ -435,6 +435,67 @@ class ImportanceScorer:
 
 
 # ================================================================
+# 查询改写（Query Rewriting）
+# ================================================================
+
+QUERY_REWRITE_PROMPT = """你是一个搜索查询改写专家。请将用户的口语化输入改写为2-3个更适合检索记忆的查询。
+
+规则：
+1. 保留原始查询的核心意图
+2. 将口语化表达转为更正式的描述性语句
+3. 从不同角度扩展查询（情感状态、具体事实、相关事件）
+4. 每个查询不超过30字
+5. 如果原始查询已经很清晰，只需微调
+
+用户输入：{query}
+
+以 JSON 数组格式返回改写后的查询（包含原始意图的改写版本）：
+["查询1", "查询2"]"""
+
+
+def rewrite_query(query: str) -> List[str]:
+    """
+    使用 LLM 将用户口语化输入改写为多个检索查询。
+
+    LLM 不可用或超时时降级返回原始查询。
+    """
+    if not query or len(query.strip()) < 2:
+        return [query]
+
+    try:
+        from llm_config import get_llm_client
+        from langchain_core.messages import HumanMessage
+
+        llm = get_llm_client(temperature=0.0, use_thinking=False)
+        prompt = QUERY_REWRITE_PROMPT.format(query=query)
+
+        # 5 秒超时，避免 LLM 慢响应阻塞检索
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(llm.invoke, [HumanMessage(content=prompt)])
+            response = future.result(timeout=5)
+
+        content = response.content.strip()
+
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
+
+        queries = json.loads(content)
+        if isinstance(queries, list) and len(queries) > 0:
+            # 确保原始查询也在列表中
+            result = [query] + [q for q in queries if q != query]
+            return result[:4]  # 最多 4 个查询（原始 + 3 个改写）
+    except concurrent.futures.TimeoutError:
+        logger.warning("[查询改写] LLM 超时(5s)，使用原始查询")
+    except Exception as e:
+        logger.warning(f"[查询改写] 失败，使用原始查询: {e}")
+
+    return [query]
+
+
+# ================================================================
 # 记忆管理器（核心）
 # ================================================================
 
@@ -551,46 +612,70 @@ class MemoryManager:
         limit: int = 5,
         emotion_filter: Optional[EmotionType] = None,
         min_importance: float = 0.0,
+        queries: Optional[List[str]] = None,
     ) -> List[MemoryItem]:
         """
-        检索记忆。
-        
-        优先使用语义匹配（Embedding 余弦相似度），
-        API 不可用或无向量数据时降级到关键词匹配。
+        混合检索：语义 + 关键词多路召回 → RRF 融合 → Reranking。
+
+        参数：
+        - queries: 可选的改写查询列表，用于多查询检索
         """
         user_memories = self._get_user_memories(user_id)
         if not user_memories:
             return []
 
-        # 尝试语义匹配
-        query_embedding = self.embedding_service.get_embedding(query)
-        has_embeddings = any(m.embedding is not None for m in user_memories.values())
+        search_queries = queries or [query]
 
-        if query_embedding is not None and has_embeddings:
-            results = self._semantic_search(user_memories, query_embedding, emotion_filter, min_importance)
-            if results:
-                for m in results:
-                    self._dirty.add((user_id, m.id))
-                self._save_to_disk()
-                return results[:limit]
+        # 多路召回 + RRF 融合
+        rrf_scores: Dict[str, float] = {}  # memory_id -> rrf_score
+        rrf_k = 60
 
-        results = self._keyword_search(user_memories, query, emotion_filter, min_importance)
-        results.sort(key=lambda x: x[0], reverse=True)
-        selected = results[:limit]
+        for q in search_queries:
+            # 语义检索
+            semantic_results = self._semantic_search_raw(user_memories, q, emotion_filter, min_importance)
+            # 关键词检索
+            keyword_results = self._keyword_search_raw(user_memories, q, emotion_filter, min_importance)
 
-        for _, m in selected:
+            # RRF: score = 1 / (k + rank + 1)
+            for rank, (score, memory) in enumerate(semantic_results):
+                rrf_scores[memory.id] = rrf_scores.get(memory.id, 0) + 1.0 / (rrf_k + rank + 1)
+            for rank, (score, memory) in enumerate(keyword_results):
+                rrf_scores[memory.id] = rrf_scores.get(memory.id, 0) + 1.0 / (rrf_k + rank + 1)
+
+        # 构建候选列表
+        candidates = []
+        for mid, rrf_score in rrf_scores.items():
+            if mid in user_memories:
+                candidates.append((rrf_score, user_memories[mid]))
+
+        if not candidates:
+            return []
+
+        # Reranking
+        ranked = self._rerank(candidates, query, emotion_filter)
+
+        # 更新访问统计
+        selected = ranked[:limit]
+        for m in selected:
+            m.access_count += 1
+            m.last_accessed = time.time()
             self._dirty.add((user_id, m.id))
         self._save_to_disk()
-        return [m for _, m in selected]
 
-    def _semantic_search(
+        return selected
+
+    def _semantic_search_raw(
         self,
         user_memories: Dict[str, MemoryItem],
-        query_embedding: List[float],
+        query: str,
         emotion_filter: Optional[EmotionType],
         min_importance: float,
-    ) -> List[MemoryItem]:
-        """语义匹配检索：基于 Embedding 余弦相似度。"""
+    ) -> List[Tuple[float, MemoryItem]]:
+        """语义匹配检索（无副作用），返回 (相似度, MemoryItem) 列表。"""
+        query_embedding = self.embedding_service.get_embedding(query)
+        if query_embedding is None:
+            return []
+
         # 对无 embedding 的记忆按需补算
         memories_without_embedding = [
             m for m in user_memories.values()
@@ -613,24 +698,20 @@ class MemoryManager:
                 continue
 
             similarity = EmbeddingService.cosine_similarity(query_embedding, memory.embedding)
-            # 综合评分：语义相似度 * 0.7 + 重要性 * 0.3
-            score = similarity * 0.7 + memory.importance * 0.3
-            if score > 0.1:
-                memory.access_count += 1
-                memory.last_accessed = time.time()
-                results.append((score, memory))
+            if similarity > 0.1:
+                results.append((similarity, memory))
 
         results.sort(key=lambda x: x[0], reverse=True)
-        return [m for _, m in results]
+        return results
 
-    def _keyword_search(
+    def _keyword_search_raw(
         self,
         user_memories: Dict[str, MemoryItem],
         query: str,
         emotion_filter: Optional[EmotionType],
         min_importance: float,
     ) -> List[Tuple[float, MemoryItem]]:
-        """关键词匹配检索（原有逻辑，作为 fallback）。"""
+        """关键词匹配检索（无副作用），返回 (匹配分, MemoryItem) 列表。"""
         results = []
         for memory in user_memories.values():
             if memory.importance < min_importance:
@@ -639,10 +720,60 @@ class MemoryManager:
                 continue
             score = self._match_score(memory, query)
             if score > 0:
-                memory.access_count += 1
-                memory.last_accessed = time.time()
                 results.append((score, memory))
+        results.sort(key=lambda x: x[0], reverse=True)
         return results
+
+    def _rerank(
+        self,
+        candidates: List[Tuple[float, MemoryItem]],
+        query: str,
+        emotion_filter: Optional[EmotionType] = None,
+    ) -> List[MemoryItem]:
+        """
+        多特征 Reranking：RRF 分数 + 时间衰减 + 情感匹配 + 重要性。
+
+        权重：
+        - RRF 分数: 0.50（检索质量）
+        - 时间衰减: 0.20（近期记忆更相关）
+        - 情感匹配: 0.15（情感状态一致的记忆更相关）
+        - 重要性:   0.15（重要记忆更相关）
+        """
+        now = time.time()
+        query_emotion, _ = self.emotion_analyzer.analyze(query)
+
+        # 归一化 RRF 分数
+        max_rrf = max(c[0] for c in candidates) if candidates else 1.0
+        if max_rrf == 0:
+            max_rrf = 1.0
+
+        scored = []
+        for rrf_score, memory in candidates:
+            # 归一化 RRF (0-1)
+            norm_rrf = rrf_score / max_rrf
+
+            # 时间衰减（1 周半衰期）
+            elapsed_hours = (now - (memory.last_accessed or memory.created_at)) / 3600
+            time_score = math.exp(-elapsed_hours / 168)
+
+            # 情感匹配
+            emotion_score = 0.0
+            if query_emotion != EmotionType.NEUTRAL and memory.emotion == query_emotion:
+                emotion_score = 1.0
+            elif query_emotion != EmotionType.NEUTRAL and memory.emotion != EmotionType.NEUTRAL:
+                emotion_score = 0.3  # 非中性情感有部分匹配
+
+            # 综合评分
+            final_score = (
+                norm_rrf * 0.50
+                + time_score * 0.20
+                + emotion_score * 0.15
+                + memory.importance * 0.15
+            )
+            scored.append((final_score, memory))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [m for _, m in scored]
 
     def _match_score(self, memory: MemoryItem, query: str) -> float:
         """计算记忆与查询的匹配度。"""
@@ -1027,32 +1158,43 @@ AI：{assistant_msg}
         query: str,
         mem0_limit: int = 5,
         local_limit: int = 3,
+        queries: Optional[List[str]] = None,
     ) -> List[Dict]:
         """
         从 Mem0 和本地记忆管理器联合检索。
-        
-        返回 enriched 结果，包含情感标签和重要性信息。
+
+        参数：
+        - queries: 可选的改写查询列表，用于多查询检索
         """
         results = []
 
-        # 1. 从 Mem0 检索（向量相似度）
+        # 1. 从 Mem0 检索（向量相似度，多查询）
         if self.mem0_client:
-            try:
-                mem0_results = self.mem0_client.search(query=query, user_id=user_id, limit=mem0_limit)
-                if mem0_results and "results" in mem0_results:
-                    for r in mem0_results["results"]:
-                        results.append({
-                            "source": "mem0",
-                            "memory": r.get("memory", ""),
-                            "score": r.get("score", 0),
-                            "emotion": EmotionType.NEUTRAL.value,
-                            "importance": 0.5,
-                        })
-            except Exception:
-                pass
+            search_queries = queries or [query]
+            seen_mem0 = set()
+            for q in search_queries:
+                try:
+                    mem0_results = self.mem0_client.search(query=q, user_id=user_id, limit=mem0_limit)
+                    if mem0_results and "results" in mem0_results:
+                        for r in mem0_results["results"]:
+                            mem_text = r.get("memory", "")
+                            dedup_key = mem_text[:30]
+                            if dedup_key not in seen_mem0:
+                                seen_mem0.add(dedup_key)
+                                results.append({
+                                    "source": "mem0",
+                                    "memory": mem_text,
+                                    "score": r.get("score", 0),
+                                    "emotion": EmotionType.NEUTRAL.value,
+                                    "importance": 0.5,
+                                })
+                except Exception:
+                    pass
 
-        # 2. 从本地记忆检索（情感/重要性增强）
-        local_results = self.memory_manager.search_memories(user_id, query, limit=local_limit)
+        # 2. 从本地记忆检索（情感/重要性增强，混合检索+RRF+Reranking）
+        local_results = self.memory_manager.search_memories(
+            user_id, query, limit=local_limit, queries=queries
+        )
         for m in local_results:
             results.append({
                 "source": "local",

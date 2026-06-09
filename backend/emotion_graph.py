@@ -35,7 +35,8 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 
-from memory_manager import MemoryManager, Mem0Bridge, EmotionType, MemoryCategory, EmotionAnalyzer
+from memory_manager import MemoryManager, Mem0Bridge, EmotionType, MemoryCategory, EmotionAnalyzer, rewrite_query
+from working_memory import WorkingMemoryStore, update_working_memory
 
 load_dotenv()
 
@@ -93,6 +94,7 @@ class AgentState(TypedDict):
     retrieved_memories: Optional[List[Dict]]        # 检索到的相关记忆
     memory_context: Optional[str]                   # 格式化后的记忆上下文
     memory_summary: Optional[str]                   # 记忆摘要（供对话 Agent 使用）
+    working_memory_text: Optional[str]              # 工作记忆文本（跨对话上下文）
 
     # 对话 Agent 输出
     assistant_reply: Optional[str]                  # 最终回复
@@ -300,13 +302,16 @@ def load_prompt_config() -> Optional[str]:
 
 def save_prompt_config(prompt: str) -> None:
     global _custom_dialogue_prompt
-    _custom_dialogue_prompt = prompt if prompt.strip() else None
+    _custom_dialogue_prompt = prompt.strip() if prompt and prompt.strip() else None
     data = {}
     if _custom_dialogue_prompt:
         data["dialogue_prompt"] = _custom_dialogue_prompt
     with open(_prompt_config_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-    logger.info(f"已保存自定义对话 prompt（{(_custom_dialogue_prompt or '')[:30]}...）")
+    if _custom_dialogue_prompt:
+        logger.info(f"已保存自定义对话 prompt（{_custom_dialogue_prompt[:30]}...）")
+    else:
+        logger.info("已恢复默认对话 prompt")
 
 
 def get_dialogue_prompt() -> str:
@@ -367,6 +372,9 @@ def _build_dialogue_messages(state: AgentState) -> list:
         historical_messages = conversation_history
 
     context_parts = []
+    working_memory_text = state.get("working_memory_text", "")
+    if working_memory_text:
+        context_parts.append(f"你对用户的整体了解（跨对话持久）：{working_memory_text}")
     if conv_summary:
         context_parts.append(f"之前聊了什么：{conv_summary}")
     if emotion_summary:
@@ -414,6 +422,7 @@ def _build_dialogue_messages(state: AgentState) -> list:
 def build_emotion_graph(
     memory_manager: Optional[MemoryManager] = None,
     mem0_bridge: Optional[Mem0Bridge] = None,
+    working_memory_store: Optional[WorkingMemoryStore] = None,
 ) -> StateGraph:
     """
     构建情感陪伴 Agent 工作流图。
@@ -432,14 +441,24 @@ def build_emotion_graph(
         user_id = state["user_id"]
         user_message = state["user_message"]
 
+        # 加载工作记忆
+        working_memory_text = ""
+        if working_memory_store:
+            working_memory_text = working_memory_store.format_for_prompt(user_id)
+
+        # 查询改写：将口语化输入扩展为多个检索查询
+        queries = rewrite_query(user_message)
+        if len(queries) > 1:
+            logger.info(f"[查询改写] 原始: {user_message[:30]} → {len(queries)} 个查询")
+
         retrieved = []
         if mem0_bridge:
             logger.info(f"[DEBUG] mem0_bridge exists, calling search_with_enrichment for user_id={user_id}, query={user_message[:50]}")
-            retrieved = mem0_bridge.search_with_enrichment(user_id, user_message, mem0_limit=5, local_limit=5)
+            retrieved = mem0_bridge.search_with_enrichment(user_id, user_message, mem0_limit=5, local_limit=5, queries=queries)
             logger.info(f"[DEBUG] search result: {len(retrieved)} items, first item={retrieved[0] if retrieved else 'None'}")
         elif memory_manager:
             logger.info(f"[DEBUG] mem0_bridge not available, falling back to local search for user_id={user_id}")
-            local_results = memory_manager.search_memories(user_id, user_message, limit=5)
+            local_results = memory_manager.search_memories(user_id, user_message, limit=5, queries=queries)
             retrieved = [{"memory": m.content, "source": "local"} for m in local_results]
             logger.info(f"[DEBUG] local search result: {len(retrieved)} items")
 
@@ -472,6 +491,7 @@ def build_emotion_graph(
             "retrieved_memories": retrieved,
             "memory_context": memory_context,
             "memory_summary": memory_summary,
+            "working_memory_text": working_memory_text,
             "workflow_log": [f"[记忆检索] {len(retrieved)} 条相关记忆"],
         }
 
@@ -482,6 +502,14 @@ def build_emotion_graph(
 
         if not reply:
             return {"workflow_log": ["[记忆存储] 跳过，无回复"]}
+
+        # 更新工作记忆（同步，非流式路径可接受）
+        if working_memory_store:
+            try:
+                update_llm = get_chat_client(temperature=0.0, use_thinking=False)
+                update_working_memory(working_memory_store, user_id, user_msg, reply, update_llm)
+            except Exception as e:
+                logger.warning(f"[工作记忆更新] 失败: {e}")
 
         if mem0_bridge:
             try:
@@ -558,6 +586,7 @@ def run_emotion_workflow_streaming(
     user_message: str,
     conversation_history: List[Dict] = None,
     image_data: str = None,
+    working_memory_store: Optional[WorkingMemoryStore] = None,
 ):
     """
     流式工作流：情感分析+记忆检索同步执行，对话生成逐 token 流式输出。
@@ -570,6 +599,11 @@ def run_emotion_workflow_streaming(
     """
     import asyncio
 
+    # 加载工作记忆
+    working_memory_text = ""
+    if working_memory_store:
+        working_memory_text = working_memory_store.format_for_prompt(user_id)
+
     initial_state = {
         "user_id": user_id,
         "user_message": user_message,
@@ -580,6 +614,7 @@ def run_emotion_workflow_streaming(
         "retrieved_memories": None,
         "memory_context": None,
         "memory_summary": None,
+        "working_memory_text": working_memory_text,
         "assistant_reply": None,
         "workflow_start_time": time.time(),
         "workflow_log": [],
@@ -591,7 +626,7 @@ def run_emotion_workflow_streaming(
 
             emotion_result, memory_result = await asyncio.gather(
                 asyncio.to_thread(emotion_analysis_node, initial_state),
-                asyncio.to_thread(_run_memory_retrieval, initial_state, memory_manager, mem0_bridge),
+                asyncio.to_thread(_run_memory_retrieval, initial_state, memory_manager, mem0_bridge, working_memory_store),
             )
             state = {**initial_state, **emotion_result, **memory_result}
 
@@ -634,17 +669,29 @@ def run_emotion_workflow_streaming(
 
             yield {'type': 'reply', 'text': reply}
 
-            if mem0_bridge:
-                try:
-                    mem0_bridge.add_to_both(
-                        state.get("user_id", "default"),
-                        state.get("user_message", ""),
-                        reply,
-                        category=MemoryCategory.EMOTION,
-                    )
-                    logger.info("💾 [流式记忆存储] 已保存")
-                except Exception as e:
-                    logger.warning(f"[流式记忆存储] 失败: {e}")
+            # 后台异步更新工作记忆和长期记忆，不阻塞响应
+            async def _background_save():
+                if working_memory_store:
+                    try:
+                        update_llm = get_chat_client(temperature=0.0, use_thinking=False)
+                        await asyncio.to_thread(update_working_memory, working_memory_store, state.get("user_id", "default"), state.get("user_message", ""), reply, update_llm)
+                    except Exception as e:
+                        logger.warning(f"[流式工作记忆更新] 失败: {e}")
+
+                if mem0_bridge:
+                    try:
+                        await asyncio.to_thread(
+                            mem0_bridge.add_to_both,
+                            state.get("user_id", "default"),
+                            state.get("user_message", ""),
+                            reply,
+                            MemoryCategory.EMOTION,
+                        )
+                        logger.info("💾 [流式记忆存储] 已保存")
+                    except Exception as e:
+                        logger.warning(f"[流式记忆存储] 失败: {e}")
+
+            asyncio.create_task(_background_save())
 
             total_time = time.time() - (state.get("workflow_start_time") or time.time())
             logger.info(f"📊 流式工作流完成 (总耗时: {total_time:.2f}s)")
@@ -663,16 +710,27 @@ def _run_memory_retrieval(
     state: Dict,
     memory_manager: Optional[MemoryManager],
     mem0_bridge: Optional[Mem0Bridge],
+    working_memory_store: Optional[WorkingMemoryStore] = None,
 ) -> Dict:
     """独立运行记忆检索节点（供流式工作流调用）。"""
     user_id = state["user_id"]
     user_message = state["user_message"]
 
+    # 加载工作记忆
+    working_memory_text = ""
+    if working_memory_store:
+        working_memory_text = working_memory_store.format_for_prompt(user_id)
+
+    # 查询改写
+    queries = rewrite_query(user_message)
+    if len(queries) > 1:
+        logger.info(f"[查询改写] 原始: {user_message[:30]} → {len(queries)} 个查询")
+
     retrieved = []
     if mem0_bridge:
-        retrieved = mem0_bridge.search_with_enrichment(user_id, user_message, mem0_limit=5, local_limit=5)
+        retrieved = mem0_bridge.search_with_enrichment(user_id, user_message, mem0_limit=5, local_limit=5, queries=queries)
     elif memory_manager:
-        local_results = memory_manager.search_memories(user_id, user_message, limit=5)
+        local_results = memory_manager.search_memories(user_id, user_message, limit=5, queries=queries)
         retrieved = [{"memory": m.content, "source": "local"} for m in local_results]
 
     memory_texts = [r.get("memory", "") for r in retrieved if r.get("memory")]
@@ -704,5 +762,6 @@ def _run_memory_retrieval(
         "retrieved_memories": retrieved,
         "memory_context": memory_context,
         "memory_summary": memory_summary,
+        "working_memory_text": working_memory_text,
         "workflow_log": [f"[记忆检索] {len(retrieved)} 条相关记忆"],
     }
