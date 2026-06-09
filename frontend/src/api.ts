@@ -187,7 +187,7 @@ export const api = {
       } catch (e) {
         const isTimeout = e instanceof DOMException && e.name === 'AbortError'
         if (isTimeout) {
-          throw new Error('连接超时，请检查网络', { cause: e })
+          throw new Error('连接超时，请检查网络')
         }
         lastError = e as Error
         if (attempt === 0) {
