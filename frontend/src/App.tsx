@@ -91,7 +91,6 @@ export default function App() {
       loadConversation(currentConvId)
     }
     // 移除 loadConversation 依赖，避免无限循环
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentConvId, isAuthenticated])
 
   if (authRequired && !isAuthenticated) {

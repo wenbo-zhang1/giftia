@@ -168,7 +168,7 @@ export const api = {
               try {
                 yield JSON.parse(data)
               } catch {
-                // skip malformed
+                /* 跳过格式错误的数据 */
               }
             }
           }
@@ -179,7 +179,7 @@ export const api = {
             if (line.startsWith('data: ')) {
               const data = line.slice(6)
               if (data === '[DONE]') return
-              try { yield JSON.parse(data) } catch {}
+              try { yield JSON.parse(data) } catch { /* 跳过格式错误的数据 */ }
             }
           }
         }
@@ -187,7 +187,7 @@ export const api = {
       } catch (e) {
         const isTimeout = e instanceof DOMException && e.name === 'AbortError'
         if (isTimeout) {
-          throw new Error('连接超时，请检查网络')
+          throw new Error('连接超时，请检查网络', { cause: e })
         }
         lastError = e as Error
         if (attempt === 0) {

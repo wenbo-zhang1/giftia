@@ -125,7 +125,9 @@ describe('消息交互', () => {
 
     const gen = useStore.getState().sendMessage('你好')
     // 消费 generator
-    for await (const _ of gen) {}
+    for await (const _event of gen) {
+      // 消费流式事件
+    }
 
     const msgs = useStore.getState().messages
     // 应有 user 消息 + assistant 消息
@@ -147,8 +149,12 @@ describe('消息交互', () => {
 
     const gen = useStore.getState().sendMessage('测试')
     try {
-      for await (const _ of gen) {}
-    } catch {}
+      for await (const _event of gen) {
+        // 消费流式事件
+      }
+    } catch {
+      // 预期会抛出错误
+    }
 
     const msgs = useStore.getState().messages
     const errMsg = msgs.find(m => m.role === 'assistant' && m.content.includes('问题'))
