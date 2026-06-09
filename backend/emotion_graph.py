@@ -28,14 +28,13 @@ import time
 import json
 import logging
 from collections import OrderedDict
-from typing import TypedDict, Annotated, Optional, List, Dict, Any, Tuple
+from typing import TypedDict, Annotated, Optional, List, Dict, Any
 from dotenv import load_dotenv
 from llm_config import get_llm_client
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langgraph.graph import StateGraph, END
-from langgraph.graph.message import add_messages
 
-from memory_manager import MemoryManager, Mem0Bridge, EmotionType, MemoryCategory, EmotionAnalyzer, rewrite_query
+from memory_manager import MemoryManager, Mem0Bridge, MemoryCategory, EmotionAnalyzer, rewrite_query
 from working_memory import WorkingMemoryStore, update_working_memory
 
 load_dotenv()

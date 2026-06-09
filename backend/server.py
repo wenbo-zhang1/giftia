@@ -28,18 +28,21 @@ from pydantic import BaseModel, Field
 load_dotenv()
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
+# ruff: noqa: E402
 from llm_config import get_llm_client
 from model_config import CHAT_MODEL, CHAT_BASE_URL, get_mem0_api_key, get_chat_api_key, detect_provider, PROVIDER_KEY_MAP
 from mem0 import MemoryClient
-from memory_manager import MemoryManager, Mem0Bridge, EmotionType, MemoryCategory
+from memory_manager import MemoryManager, Mem0Bridge
 from working_memory import WorkingMemoryStore
-from emotion_graph import build_emotion_graph, run_emotion_workflow, run_emotion_workflow_streaming, load_prompt_config, save_prompt_config, get_dialogue_prompt, DIALOGUE_AGENT_PROMPT
-from file_processor import is_multimodal_model, image_to_base64_data_url
+from emotion_graph import build_emotion_graph, run_emotion_workflow_streaming, load_prompt_config, save_prompt_config, get_dialogue_prompt, DIALOGUE_AGENT_PROMPT
+from file_processor import is_multimodal_model
 from conversation_store import ConversationStore
 
 # ================================================================
 # 配置
 # ================================================================
+
+logger = logging.getLogger("server")
 
 MEM0_API_KEY = ""
 CHAT_API_KEY = ""
@@ -64,7 +67,6 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%H:%M:%S",
 )
-logger = logging.getLogger("server")
 
 class MemoryLogHandler(logging.Handler):
     def __init__(self, maxlen: int = 500):
@@ -501,8 +503,7 @@ async def get_users():
 @app.post("/api/users", dependencies=[Depends(verify_access_key)])
 async def create_user(user_id: str = Query(..., min_length=1, max_length=50)):
     user_id = user_id.strip()
-    store: ConversationStore = _app_state["conversation_store"]
-    convs, _ = _ensure_conversation(user_id)
+    _ensure_conversation(user_id)
     return {"ok": True, "user_id": user_id}
 
 # ================================================================
@@ -630,7 +631,7 @@ async def _check_mem0_connectivity() -> str:
     if not bridge or not bridge.mem0_client:
         return "unreachable"
     try:
-        result = await asyncio.wait_for(
+        await asyncio.wait_for(
             asyncio.to_thread(bridge.mem0_client.search, query="ping", user_id="health_check", limit=1),
             timeout=5.0,
         )

@@ -13,7 +13,7 @@ import time
 import sqlite3
 import threading
 import logging
-from typing import Optional, Dict, List
+from typing import Dict, List
 
 logger = logging.getLogger(__name__)
 

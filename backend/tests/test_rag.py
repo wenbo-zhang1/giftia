@@ -7,9 +7,7 @@ Giftia - RAG 优化 & 工作记忆 单元测试
 import os
 import sys
 import time
-import sqlite3
 import tempfile
-import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -279,7 +277,7 @@ class TestHybridSearch:
         """Reranking 应偏好近期记忆。"""
         mm, db_path, cleanup = self._make_mm()
         try:
-            from memory_manager import MemoryItem, EmotionType
+            from memory_manager import MemoryItem
             now = time.time()
 
             old_mem = MemoryItem(

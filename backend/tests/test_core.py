@@ -6,9 +6,7 @@ Giftia - 核心模块单元测试
 
 import os
 import sys
-import math
 import time
-import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
