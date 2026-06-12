@@ -1,4 +1,4 @@
-import type { Conversation, UserInfo, MemoryStats, ModelConfig, Message, LogEntry, PromptConfig } from './types'
+import type { Conversation, UserInfo, MemoryStats, ModelConfig, Message, LogEntry, PromptConfig, MemoryDetailResponse, UserProfileResponse } from './types'
 
 const BASE = '/api'
 
@@ -111,6 +111,14 @@ export const api = {
 
   getLogs(limit = 200): Promise<{ logs: LogEntry[] }> {
     return request(`/logs?limit=${limit}`)
+  },
+
+  getMemoryDetail(userId: string): Promise<MemoryDetailResponse> {
+    return request(`/memory/${userId}/detail`)
+  },
+
+  getUserProfile(userId: string): Promise<UserProfileResponse> {
+    return request(`/profile/${userId}`)
   },
 
   async *sendMessage(

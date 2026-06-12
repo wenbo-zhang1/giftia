@@ -6,6 +6,7 @@ import StatsCard from './StatsCard'
 import ModelDialog from './ModelDialog'
 import ConfirmDialog from './ConfirmDialog'
 import LogViewerModal from './LogViewerModal'
+import MemoryViewerModal from './MemoryViewerModal'
 import PromptDialog from './PromptDialog'
 import './Sidebar.css'
 
@@ -17,6 +18,7 @@ export default function Sidebar() {
   const [showClearConfirm, setShowClearConfirm] = useState(false)
   const [showLogs, setShowLogs] = useState(false)
   const [showPrompt, setShowPrompt] = useState(false)
+  const [showMemory, setShowMemory] = useState(false)
 
   const handleNewChat = async () => {
     await createConversation()
@@ -60,6 +62,13 @@ export default function Sidebar() {
       <UserSection />
 
       <div className="sidebar-actions">
+        <button className="sidebar-action-btn" onClick={() => setShowMemory(true)}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 2a7 7 0 0 1 7 7c0 2.5-1.3 4.7-3.3 6L12 22l-3.7-7C6.3 13.7 5 11.5 5 9a7 7 0 0 1 7-7z" />
+            <circle cx="12" cy="9" r="2.5" fill="currentColor" stroke="none" />
+          </svg>
+          查看记忆
+        </button>
         <button className="sidebar-action-btn" onClick={() => setShowPrompt(true)}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
@@ -89,6 +98,7 @@ export default function Sidebar() {
 
       {showModel && <ModelDialog onClose={() => setShowModel(false)} />}
       {showLogs && <LogViewerModal onClose={() => setShowLogs(false)} />}
+      {showMemory && <MemoryViewerModal onClose={() => setShowMemory(false)} />}
       {showPrompt && <PromptDialog onClose={() => setShowPrompt(false)} />}
       {showClearConfirm && (
         <ConfirmDialog

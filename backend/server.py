@@ -591,54 +591,6 @@ async def get_memory_layers(user_id: str):
     return stats
 
 
-@app.get("/api/memory/{user_id}/detail", dependencies=[Depends(verify_access_key)])
-async def get_memory_detail(user_id: str):
-    """获取用户记忆详情（分层记忆 + 工作记忆）"""
-    mm: MemoryManager = _app_state["memory_manager"]
-    working_memory_store: WorkingMemoryStore = _app_state["working_memory_store"]
-    
-    # 获取所有记忆
-    user_memories = mm._get_user_memories(user_id)
-    
-    # 按层级分组
-    layers = {
-        "core": [],
-        "important": [],
-        "regular": [],
-    }
-    
-    layer_names = {1: "core", 2: "important", 3: "regular"}
-    
-    for memory_id, memory in user_memories.items():
-        layer = memory.layer if hasattr(memory, "layer") else 3
-        layer_name = layer_names.get(layer, "regular")
-        
-        memory_detail = {
-            "id": memory_id,
-            "content": memory.content,
-            "emotion": memory.emotion.value if hasattr(memory.emotion, "value") else str(memory.emotion),
-            "emotion_emoji": memory.emotion.to_emoji() if hasattr(memory.emotion, "to_emoji") else "😐",
-            "emotion_intensity": memory.emotion_intensity,
-            "category": memory.category.value if hasattr(memory.category, "value") else str(memory.category),
-            "importance": memory.importance,
-            "access_count": memory.access_count,
-            "created_at": memory.created_at,
-            "last_accessed": memory.last_accessed,
-            "is_consolidated": memory.is_consolidated,
-            "tags": memory.tags,
-            "temporal_data": memory.temporal_data if hasattr(memory, "temporal_data") else {},
-        }
-        layers[layer_name].append(memory_detail)
-    
-    # 获取工作记忆
-    working_memory = working_memory_store.load(user_id)
-    
-    return {
-        "layers": layers,
-        "working_memory": working_memory,
-    }
-
-
 @app.patch("/api/memory/{user_id}/{memory_id}/layer", dependencies=[Depends(verify_access_key)])
 async def update_memory_layer(user_id: str, memory_id: str, new_layer: int):
     """手动调整记忆层级"""

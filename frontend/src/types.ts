@@ -52,3 +52,49 @@ export interface PromptConfig {
   default_prompt: string
   is_custom: boolean
 }
+
+export interface MemoryDetail {
+  id: string
+  content: string
+  emotion: string
+  emotion_emoji: string
+  emotion_intensity: number
+  category: string
+  importance: number
+  access_count: number
+  created_at: number
+  last_accessed: number
+  is_consolidated: boolean
+  tags: string[]
+  temporal_data: Record<string, any>
+}
+
+export interface WorkingMemory {
+  summary: string
+  open_topics: string[]
+  current_emotion: string
+  updated_at: number
+}
+
+export interface MemoryDetailResponse {
+  layers: {
+    core: MemoryDetail[]
+    important: MemoryDetail[]
+    regular: MemoryDetail[]
+  }
+  working_memory: WorkingMemory
+}
+
+export interface UserProfileData {
+  identity: Record<string, any>
+  preferences: Record<string, any>
+  relationships: Record<string, any>
+  emotional_profile: Record<string, any>
+}
+
+export interface UserProfileResponse {
+  user_id: string
+  profile: UserProfileData
+  prompt_context: string
+  version: number
+}

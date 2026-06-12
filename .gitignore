@@ -52,3 +52,6 @@ backend/prompt_config.json
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# 内部文档（TDD、审阅报告等，不入版本控制）
+docs/
