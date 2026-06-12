@@ -1,5 +1,5 @@
 langchain-openai>=0.1.0
-langchain-core>=0.1.0
+langchain-core>=1.4.6
 langgraph>=0.0.20
 fastapi>=0.104.0
 uvicorn>=0.24.0
