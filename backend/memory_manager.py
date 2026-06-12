@@ -6,10 +6,11 @@
 2. 记忆重要性评分：基于多维度评估记忆的重要性
 3. 遗忘曲线机制：基于艾宾浩斯遗忘曲线的记忆衰减与巩固
 4. 记忆合并与清理：自动合并相似记忆，清理低价值记忆
+5. 事实提取与存储：从对话中提取关键事实并存储为记忆
 
 设计目标：
-- 展示功能：展示完整的记忆系统设计能力
-- 模块化设计：可与 Mem0 配合使用，也可独立运行
+- 完整的本地记忆系统，无需外部依赖
+- 模块化设计，各组件可独立使用
 """
 
 import os
@@ -58,6 +59,7 @@ class EmotionType(Enum):
     @classmethod
     def from_string(cls, emotion: str) -> "EmotionType":
         mapping = {
+            # 中文映射
             "开心": cls.HAPPY, "快乐": cls.HAPPY, "高兴": cls.HAPPY, "愉快": cls.HAPPY, "兴奋": cls.EXCITED, "激动": cls.EXCITED,
             "难过": cls.SAD, "悲伤": cls.SAD, "伤心": cls.SAD, "失落": cls.SAD, "沮丧": cls.SAD, "孤独": cls.LONELY,
             "焦虑": cls.ANXIOUS, "紧张": cls.ANXIOUS, "压力": cls.STRESSED, "担忧": cls.ANXIOUS, "害怕": cls.FEARFUL,
@@ -65,6 +67,11 @@ class EmotionType(Enum):
             "感恩": cls.GRATEFUL, "感谢": cls.GRATEFUL, "谢谢": cls.GRATEFUL,
             "希望": cls.HOPEFUL, "期待": cls.HOPEFUL, "放心": cls.RELIEVED,
             "平静": cls.NEUTRAL, "一般": cls.NEUTRAL, "没事": cls.NEUTRAL,
+            # 英文映射（情感分析 Agent 返回英文标签）
+            "happy": cls.HAPPY, "sad": cls.SAD, "anxious": cls.ANXIOUS, "angry": cls.ANGRY,
+            "neutral": cls.NEUTRAL, "excited": cls.EXCITED, "fearful": cls.FEARFUL,
+            "grateful": cls.GRATEFUL, "lonely": cls.LONELY, "hopeful": cls.HOPEFUL,
+            "stressed": cls.STRESSED, "relieved": cls.RELIEVED,
         }
         return mapping.get(emotion, cls.NEUTRAL)
 
@@ -95,7 +102,7 @@ class MemoryCategory(Enum):
 
 @dataclass
 class MemoryItem:
-    """单条记忆数据结构。"""
+    """单条记忆数据结构（扩展版）。"""
     id: str                           # 记忆唯一 ID
     content: str                      # 记忆内容
     emotion: EmotionType = EmotionType.NEUTRAL   # 情感标签
@@ -108,6 +115,10 @@ class MemoryItem:
     tags: List[str] = field(default_factory=list)  # 关键词标签
     is_consolidated: bool = False     # 是否已巩固
     embedding: Optional[List[float]] = None  # 语义向量
+    
+    # ========== 新增字段（v2） ==========
+    layer: int = 3                    # 记忆层级：1=核心, 2=重要, 3=常规
+    temporal_data: Dict = field(default_factory=dict)  # 时间标签数据
 
     def to_dict(self) -> Dict:
         d = {
@@ -122,6 +133,9 @@ class MemoryItem:
             "emotion_intensity": self.emotion_intensity,
             "tags": self.tags,
             "is_consolidated": self.is_consolidated,
+            # 新增字段
+            "layer": self.layer,
+            "temporal_data": self.temporal_data,
         }
         if self.embedding is not None:
             d["embedding"] = self.embedding
@@ -134,6 +148,11 @@ class MemoryItem:
         data["category"] = MemoryCategory(data["category"])
         if "embedding" not in data:
             data["embedding"] = None
+        # 兼容旧数据：如果没有新字段，使用默认值
+        if "layer" not in data:
+            data["layer"] = 3
+        if "temporal_data" not in data:
+            data["temporal_data"] = {}
         return cls(**data)
 
 
@@ -300,11 +319,13 @@ class EmotionAnalyzer:
     EMOTION_KEYWORDS = {
         EmotionType.HAPPY: [
             "开心", "快乐", "高兴", "愉快", "幸福", "满足", "太好了", "棒", "爽",
-            "笑", "好玩", "有趣", "喜欢", "爱", "期待", "惊喜", "顺利", "成功",
+            "笑", "好玩", "有趣", "惊喜", "顺利", "成功",
         ],
         EmotionType.SAD: [
             "难过", "悲伤", "伤心", "失落", "沮丧", "哭", "痛苦", "绝望",
             "无奈", "失望", "心碎", "眼泪", "不开心", "郁闷", "低落",
+            "失败", "挫败", "遗憾", "错过", "被拒", "碰壁", "落空",
+            "没戏", "泡汤", "完了", "凉了",
         ],
         EmotionType.ANXIOUS: [
             "焦虑", "紧张", "担心", "害怕", "不安", "惶恐", "压力", "喘不过气",
@@ -315,7 +336,7 @@ class EmotionAnalyzer:
             " rage", "发火", "暴躁",
         ],
         EmotionType.EXCITED: [
-            "兴奋", "激动", "期待", "迫不及待", "振奋", "狂热",
+            "兴奋", "激动", "迫不及待", "振奋", "狂热",
         ],
         EmotionType.FEARFUL: [
             "害怕", "恐惧", "恐慌", "吓死", "不敢", "畏惧", "胆怯",
@@ -327,7 +348,7 @@ class EmotionAnalyzer:
             "孤独", "寂寞", "孤单", "一个人", "没人陪", "冷落",
         ],
         EmotionType.HOPEFUL: [
-            "希望", "期待", "相信", "一定", "会好的", "努力", "未来",
+            "希望", "相信", "会好的", "未来",
         ],
         EmotionType.STRESSED: [
             "压力", "累", "疲惫", "受不了", "崩溃", "撑不住", "喘不过气",
@@ -337,6 +358,17 @@ class EmotionAnalyzer:
             "放心", "安心", "松了一口气", "还好", "总算", "解脱",
         ],
     }
+
+    # 语境翻转规则：当正向词与负面语境共现时，翻转为 SAD
+    # 格式：(正向关键词, 负面语境词列表, 翻转目标情感)
+    CONTEXT_FLIPS = [
+        ("喜欢", ["没牵", "没拉", "没在一起", "不喜欢我", "拒绝", "没结果", "没回应", "单相思", "暗恋", "手都没牵"], EmotionType.SAD),
+        ("爱", ["不爱", "分手", "离开", "拒绝", "单相思", "没结果"], EmotionType.SAD),
+        ("努力", ["失败", "没用", "白费", "不行", "被拒", "碰壁", "落空", "没结果", "找不到", "还是没"], EmotionType.SAD),
+        ("期待", ["落空", "失望", "没实现", "泡汤", "没了"], EmotionType.SAD),
+        ("希望", ["破灭", "没了", "失望", "落空"], EmotionType.SAD),
+        ("成功", ["没成功", "不成功", "失败"], EmotionType.SAD),
+    ]
 
     INTENSIFIERS = ["非常", "特别", "超级", "极其", "万分", "太", "真的很", "特别", "格外", "十分"]
     NEGATORS = ["不", "没", "别", "别", "别要", "没有", "并非", "并不"]
@@ -352,6 +384,15 @@ class EmotionAnalyzer:
         返回：
         - (情感标签, 情感强度 0-1)
         """
+        # 第一步：检查语境翻转规则（优先级最高）
+        for positive_kw, negative_contexts, flip_emotion in cls.CONTEXT_FLIPS:
+            if positive_kw in text:
+                for ctx in negative_contexts:
+                    if ctx in text:
+                        # 正向词 + 负面语境 → 翻转
+                        return flip_emotion, 0.6
+
+        # 第二步：常规关键词匹配
         scores = {}
         for emotion, keywords in cls.EMOTION_KEYWORDS.items():
             score = 0.0
@@ -730,14 +771,17 @@ class MemoryManager:
         emotion_filter: Optional[EmotionType] = None,
     ) -> List[MemoryItem]:
         """
-        多特征 Reranking：RRF 分数 + 时间衰减 + 情感匹配 + 重要性。
+        多特征 Reranking：RRF 分数 + 时间衰减 + 情感匹配 + 重要性 + layer 权重。
 
-        权重：
-        - RRF 分数: 0.50（检索质量）
-        - 时间衰减: 0.20（近期记忆更相关）
-        - 情感匹配: 0.15（情感状态一致的记忆更相关）
-        - 重要性:   0.15（重要记忆更相关）
+        权重（v2.0 修复版）：
+        - RRF 分数: 0.50（检索质量，保持不变）
+        - 时间衰减: 0.20（近期记忆更相关，保持不变）
+        - 情感匹配: 0.15（情感状态一致的记忆更相关，保持不变）
+        - 重要性:   0.10（重要记忆更相关，从 0.15 降到 0.10）
+        - layer 权重: 0.05（新增，从重要性中分出）
         """
+        from memory_layer import MemoryLayer  # 延迟导入，避免循环依赖
+        
         now = time.time()
         query_emotion, _ = self.emotion_analyzer.analyze(query)
 
@@ -751,9 +795,11 @@ class MemoryManager:
             # 归一化 RRF (0-1)
             norm_rrf = rrf_score / max_rrf
 
-            # 时间衰减（1 周半衰期）
+            # 时间衰减（使用 layer 的遗忘强度）
+            layer = memory.layer if hasattr(memory, "layer") else 3
+            strength = MemoryLayer(layer).get_forgetting_strength()
             elapsed_hours = (now - (memory.last_accessed or memory.created_at)) / 3600
-            time_score = math.exp(-elapsed_hours / 168)
+            time_score = math.exp(-elapsed_hours / (strength * 24 + 1))
 
             # 情感匹配
             emotion_score = 0.0
@@ -762,12 +808,16 @@ class MemoryManager:
             elif query_emotion != EmotionType.NEUTRAL and memory.emotion != EmotionType.NEUTRAL:
                 emotion_score = 0.3  # 非中性情感有部分匹配
 
-            # 综合评分
+            # layer 权重
+            layer_weight = MemoryLayer(layer).get_retrieval_weight()
+
+            # 综合评分（修复版：保持 RRF 权重不变）
             final_score = (
-                norm_rrf * 0.50
-                + time_score * 0.20
-                + emotion_score * 0.15
-                + memory.importance * 0.15
+                norm_rrf * 0.50          # 检索质量（保持不变）
+                + time_score * 0.20      # 时间衰减（保持不变）
+                + emotion_score * 0.15   # 情感匹配（保持不变）
+                + memory.importance * 0.10  # 重要性（从 0.15 降到 0.10）
+                + layer_weight * 0.05    # layer 权重（新增，从重要性中分出）
             )
             scored.append((final_score, memory))
 
@@ -957,80 +1007,60 @@ class MemoryManager:
         conn.execute("DELETE FROM memories WHERE user_id = ?", (user_id,))
         conn.commit()
 
+    # ================================================================
+    # 事实提取与存储
+    # ================================================================
 
-# ================================================================
-# 与 Mem0 的桥接适配器
-# ================================================================
-
-class Mem0Bridge:
-    """
-    Mem0 与本地记忆管理器的桥接适配器。
-    
-    作用：
-    - 将 Mem0 的搜索结果转换为本地 MemoryItem 格式
-    - 将本地记忆同步到 Mem0（用于向量检索）
-    """
-
-    def __init__(self, memory_manager: MemoryManager, mem0_client=None):
-        self.memory_manager = memory_manager
-        self.mem0_client = mem0_client
-
-    def add_to_both(
+    def extract_and_store_facts(
         self,
         user_id: str,
         user_msg: str,
         assistant_msg: str,
         category: MemoryCategory = MemoryCategory.FACT,
-    ):
-        """
-        同时添加到 Mem0 和本地记忆管理器。
+        emotion: Optional[EmotionType] = None,
+        emotion_intensity: Optional[float] = None,
+    ) -> List[str]:
+        """从对话中提取关键事实并存储为记忆。
         
-        1. Mem0 负责自动提取和向量化
-        2. 本地管理器负责情感标注、重要性评分、遗忘管理
+        返回提取到的事实列表。
         """
         extracted_facts = self._extract_facts(user_msg, assistant_msg)
 
-        # 添加到 Mem0（向量化检索）
-        if self.mem0_client:
-            try:
-                self.mem0_client.add(
-                    messages=[
-                        {"role": "user", "content": user_msg},
-                        {"role": "assistant", "content": assistant_msg},
-                    ],
-                    user_id=user_id,
-                )
-            except Exception:
-                pass
-
-        # 添加到本地记忆管理器（存储提取后的事实）
         if extracted_facts:
             for fact in extracted_facts:
-                self.memory_manager.add_memory(
+                self.add_memory(
                     user_id=user_id,
                     content=fact,
                     category=category,
+                    emotion=emotion,
+                    emotion_intensity=emotion_intensity,
                 )
         else:
             user_summary = user_msg.strip()[:60]
             ai_summary = assistant_msg.strip()[:80]
             if len(user_summary) >= 2:
-                self.memory_manager.add_memory(
+                self.add_memory(
                     user_id=user_id,
                     content=f"[对话摘要] 用户说：{user_summary}",
                     category=category,
+                    emotion=emotion,
+                    emotion_intensity=emotion_intensity,
                 )
             if len(ai_summary) >= 4:
-                self.memory_manager.add_memory(
+                self.add_memory(
                     user_id=user_id,
                     content=f"[对话摘要] AI回复要点：{ai_summary}",
                     category=category,
+                    emotion=emotion,
+                    emotion_intensity=emotion_intensity,
                 )
+
+        return extracted_facts
 
     def _extract_facts(self, user_msg: str, assistant_msg: str) -> List[str]:
         """从对话中提取关于用户的关键事实。使用规则 + LLM 混合提取。"""
         facts = []
-        logger.info(f"[DEBUG] _extract_facts called, user_msg={user_msg[:80]}")
+        logger.info(f"[事实提取] user_msg={user_msg[:80]}")
 
         info_keywords = ["我叫", "我是", "我喜欢", "我不喜欢", "我的职业", "我的工作",
                          "我养了", "我有", "我在", "我从事", "我来自", "我结婚", "我单身",
@@ -1061,11 +1091,11 @@ class Mem0Bridge:
                 if f not in existing:
                     facts.append(f)
         except Exception as e:
-            logger.warning(f"[DEBUG] _llm_extract_facts failed: {e}")
+            logger.warning(f"[事实提取] LLM 提取失败: {e}")
 
         facts = self._filter_low_quality_facts(facts)
 
-        logger.info(f"[DEBUG] _extract_facts result: {facts}")
+        logger.info(f"[事实提取] 提取了 {len(facts)} 条事实")
         return facts[:5]
 
     def _filter_low_quality_facts(self, facts: List[str]) -> List[str]:
@@ -1073,13 +1103,10 @@ class Mem0Bridge:
         filtered = []
         seen_prefixes = set()
         for f in facts:
-            # 移除空事实
             if not f or len(f) < 5:
                 continue
-            # 移除不完整句子（以逗号、句号等结尾）
             if f.rstrip().endswith("，") or f.rstrip().endswith(","):
                 continue
-            # 去重（基于前缀）
             prefix = f[:20]
             if prefix in seen_prefixes:
                 continue
@@ -1146,98 +1173,7 @@ AI：{assistant_msg}
                         tagged.append(f"[关于用户] {f}")
                 return tagged
         except Exception as e:
-            logger.warning(f"[DEBUG] LLM extraction error: {e}")
+            logger.warning(f"[事实提取] LLM 提取错误: {e}")
             pass
 
         return []
-
-    def search_with_enrichment(
-        self,
-        user_id: str,
-        query: str,
-        mem0_limit: int = 5,
-        local_limit: int = 3,
-        queries: Optional[List[str]] = None,
-    ) -> List[Dict]:
-        """
-        从 Mem0 和本地记忆管理器联合检索。
-
-        参数：
-        - queries: 可选的改写查询列表，用于多查询检索
-        """
-        results = []
-
-        # 1. 从 Mem0 检索（向量相似度，多查询）
-        if self.mem0_client:
-            search_queries = queries or [query]
-            seen_mem0 = set()
-            for q in search_queries:
-                try:
-                    mem0_results = self.mem0_client.search(query=q, user_id=user_id, limit=mem0_limit)
-                    if mem0_results and "results" in mem0_results:
-                        for r in mem0_results["results"]:
-                            mem_text = r.get("memory", "")
-                            dedup_key = mem_text[:30]
-                            if dedup_key not in seen_mem0:
-                                seen_mem0.add(dedup_key)
-                                results.append({
-                                    "source": "mem0",
-                                    "memory": mem_text,
-                                    "score": r.get("score", 0),
-                                    "emotion": EmotionType.NEUTRAL.value,
-                                    "importance": 0.5,
-                                })
-                except Exception:
-                    pass
-
-        # 2. 从本地记忆检索（情感/重要性增强，混合检索+RRF+Reranking）
-        local_results = self.memory_manager.search_memories(
-            user_id, query, limit=local_limit, queries=queries
-        )
-        for m in local_results:
-            results.append({
-                "source": "local",
-                "memory": m.content,
-                "score": m.importance,
-                "emotion": m.emotion.value,
-                "importance": m.importance,
-                "category": m.category.value,
-                "emotion_emoji": m.emotion.to_emoji(),
-            })
-
-        # 去重（基于内容相似度）
-        results = self._deduplicate(results)
-
-        # 回退：当 Mem0（异步索引延迟）和本地关键词搜索都无结果时，
-        # 返回最近 N 条记忆作为兜底，确保记忆系统始终可用
-        if not results:
-            user_memories = self.memory_manager._get_user_memories(user_id)
-            sorted_by_time = sorted(
-                user_memories.values(),
-                key=lambda m: m.created_at,
-                reverse=True,
-            )
-            for m in sorted_by_time[:local_limit]:
-                results.append({
-                    "source": "local_recent",
-                    "memory": m.content,
-                    "score": 0.1,
-                    "emotion": m.emotion.value,
-                    "importance": m.importance,
-                    "category": m.category.value,
-                    "emotion_emoji": m.emotion.to_emoji(),
-                })
-
-        return results[:mem0_limit + local_limit]
-
-    def _deduplicate(self, results: List[Dict]) -> List[Dict]:
-        """简单去重：移除内容高度相似的记忆。"""
-        seen = set()
-        unique = []
-        for r in results:
-            # 使用内容的前 20 个字符作为简单哈希
-            key = r["memory"][:30]
-            if key not in seen:
-                seen.add(key)
-                unique.append(r)
-        return unique

@@ -34,7 +34,7 @@ from llm_config import get_llm_client
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langgraph.graph import StateGraph, END
 
-from memory_manager import MemoryManager, Mem0Bridge, MemoryCategory, EmotionAnalyzer, rewrite_query
+from memory_manager import MemoryManager, MemoryCategory, EmotionAnalyzer, EmotionType, rewrite_query
 from working_memory import WorkingMemoryStore, update_working_memory
 
 load_dotenv()
@@ -104,7 +104,6 @@ class AgentState(TypedDict):
 
     # 内部依赖（不通过 reducer 传递）
     _memory_manager: Any = None
-    _mem0_bridge: Any = None
 
 
 # ================================================================
@@ -372,8 +371,11 @@ def _build_dialogue_messages(state: AgentState) -> list:
 
     context_parts = []
     working_memory_text = state.get("working_memory_text", "")
+    profile_context = state.get("profile_context", "")  # 新增：档案卡上下文
     if working_memory_text:
         context_parts.append(f"你对用户的整体了解（跨对话持久）：{working_memory_text}")
+    if profile_context:  # 新增：注入档案卡
+        context_parts.append(profile_context)
     if conv_summary:
         context_parts.append(f"之前聊了什么：{conv_summary}")
     if emotion_summary:
@@ -420,8 +422,8 @@ def _build_dialogue_messages(state: AgentState) -> list:
 
 def build_emotion_graph(
     memory_manager: Optional[MemoryManager] = None,
-    mem0_bridge: Optional[Mem0Bridge] = None,
     working_memory_store: Optional[WorkingMemoryStore] = None,
+    profile_manager=None,
 ) -> StateGraph:
     """
     构建情感陪伴 Agent 工作流图。
@@ -431,7 +433,7 @@ def build_emotion_graph(
     
     注意：使用闭包传递依赖，避免 LangGraph State 序列化问题。
     """
-    logger.info(f"[DEBUG] build_emotion_graph: mem0_bridge={'OK' if mem0_bridge else 'None'}")
+    logger.info(f"[DEBUG] build_emotion_graph: memory_manager={'OK' if memory_manager else 'None'}")
     graph = StateGraph(AgentState)
 
     # 使用闭包创建节点函数，捕获依赖
@@ -445,21 +447,23 @@ def build_emotion_graph(
         if working_memory_store:
             working_memory_text = working_memory_store.format_for_prompt(user_id)
 
+        # 新增：加载档案卡
+        profile_context = ""
+        if profile_manager:
+            profile = profile_manager.get_profile(user_id)
+            if profile:
+                profile_context = profile.to_prompt_context()
+
         # 查询改写：将口语化输入扩展为多个检索查询
         queries = rewrite_query(user_message)
         if len(queries) > 1:
             logger.info(f"[查询改写] 原始: {user_message[:30]} → {len(queries)} 个查询")
 
         retrieved = []
-        if mem0_bridge:
-            logger.info(f"[DEBUG] mem0_bridge exists, calling search_with_enrichment for user_id={user_id}, query={user_message[:50]}")
-            retrieved = mem0_bridge.search_with_enrichment(user_id, user_message, mem0_limit=5, local_limit=5, queries=queries)
-            logger.info(f"[DEBUG] search result: {len(retrieved)} items, first item={retrieved[0] if retrieved else 'None'}")
-        elif memory_manager:
-            logger.info(f"[DEBUG] mem0_bridge not available, falling back to local search for user_id={user_id}")
-            local_results = memory_manager.search_memories(user_id, user_message, limit=5, queries=queries)
+        if memory_manager:
+            local_results = memory_manager.search_memories(user_id, user_message, limit=10, queries=queries)
             retrieved = [{"memory": m.content, "source": "local"} for m in local_results]
-            logger.info(f"[DEBUG] local search result: {len(retrieved)} items")
+            logger.info(f"[记忆检索] 本地检索: {len(retrieved)} 条")
 
         memory_texts = [r.get("memory", "") for r in retrieved if r.get("memory")]
 
@@ -491,6 +495,7 @@ def build_emotion_graph(
             "memory_context": memory_context,
             "memory_summary": memory_summary,
             "working_memory_text": working_memory_text,
+            "profile_context": profile_context,  # 新增：传递档案卡上下文
             "workflow_log": [f"[记忆检索] {len(retrieved)} 条相关记忆"],
         }
 
@@ -502,7 +507,7 @@ def build_emotion_graph(
         if not reply:
             return {"workflow_log": ["[记忆存储] 跳过，无回复"]}
 
-        # 更新工作记忆（同步，非流式路径可接受）
+        # 1. 更新工作记忆（现有逻辑）
         if working_memory_store:
             try:
                 update_llm = get_chat_client(temperature=0.0, use_thinking=False)
@@ -510,20 +515,69 @@ def build_emotion_graph(
             except Exception as e:
                 logger.warning(f"[工作记忆更新] 失败: {e}")
 
-        if mem0_bridge:
+        # 2. 存储长期记忆（传递情感分析 Agent 的结果）
+        if memory_manager:
             try:
-                # 直接使用当前轮次的对话进行事实提取
-                # _extract_facts 中的 LLM 会自动过滤问题，提取有价值的陈述
-                logger.info(f"[DEBUG] save_memory_node: storing current round (user_msg={user_msg[:50]})")
-                mem0_bridge.add_to_both(user_id, user_msg, reply, category=MemoryCategory.EMOTION)
+                # 从情感分析 Agent 的结果中提取情感标签
+                emotion_analysis = state.get("emotion_analysis")
+                emotion_type = None
+                emotion_intensity = None
+                if emotion_analysis:
+                    try:
+                        emotion_type = EmotionType.from_string(emotion_analysis.get("current_emotion", ""))
+                    except (ValueError, AttributeError):
+                        emotion_type = None
+                    emotion_intensity = emotion_analysis.get("emotion_intensity")
+                
+                memory_manager.extract_and_store_facts(
+                    user_id, user_msg, reply,
+                    category=MemoryCategory.EMOTION,
+                    emotion=emotion_type,
+                    emotion_intensity=emotion_intensity,
+                )
                 logger.info("💾 [记忆存储] 已保存")
-                return {"workflow_log": ["[记忆存储] 已保存"]}
             except Exception as e:
                 logger.warning(f"[记忆存储] 失败: {e}")
-                return {"workflow_log": [f"[记忆存储] 失败: {e}"]}
 
-        logger.warning("[记忆存储] 跳过，无桥接器")
-        return {"workflow_log": ["[记忆存储] 跳过，无桥接器"]}
+        # 3. 新增：更新档案卡
+        if profile_manager:
+            try:
+                from user_profile import ProfileUpdater
+                profile_updater = ProfileUpdater(profile_manager)
+                llm_client = get_chat_client(temperature=0.0, use_thinking=False)
+                updated_fields = profile_updater.update_from_conversation(
+                    user_id=user_id,
+                    user_msg=user_msg,
+                    assistant_msg=reply,
+                    llm_client=llm_client,
+                )
+                if updated_fields:
+                    logger.info(f"[档案卡更新] 用户 {user_id}: 更新了 {updated_fields}")
+            except Exception as e:
+                logger.warning(f"[档案卡更新] 失败: {e}")
+
+        # 4. 新增：提取时间标签并附加到本次对话产生的所有记忆
+        if memory_manager:
+            try:
+                from temporal_metadata import TemporalExtractor
+                temporal = TemporalExtractor.extract_from_text(user_msg)
+                if temporal.event_time or temporal.time_context or temporal.recurrence:
+                    user_memories = memory_manager._get_user_memories(user_id)
+                    now = time.time()
+                    recent_memories = [
+                        m for m in user_memories.values()
+                        if now - m.created_at < 10  # 10 秒内的记忆
+                    ]
+                    for memory in recent_memories:
+                        memory.temporal_data = temporal.to_dict()
+                        memory_manager._dirty.add((user_id, memory.id))
+                    if recent_memories:
+                        memory_manager._save_to_disk()
+                        logger.info(f"[时间标签] 为 {len(recent_memories)} 条记忆附加了时间标签")
+            except Exception as e:
+                logger.warning(f"[时间标签更新] 失败: {e}")
+
+        return {"workflow_log": ["[记忆存储] 完成"]}
 
     # 添加节点
     graph.add_node("emotion_analysis", emotion_analysis_node)
@@ -580,12 +634,12 @@ def run_emotion_workflow(
 
 def run_emotion_workflow_streaming(
     memory_manager: Optional[MemoryManager],
-    mem0_bridge: Optional[Mem0Bridge],
     user_id: str,
     user_message: str,
     conversation_history: List[Dict] = None,
     image_data: str = None,
     working_memory_store: Optional[WorkingMemoryStore] = None,
+    profile_manager=None,
 ):
     """
     流式工作流：情感分析+记忆检索同步执行，对话生成逐 token 流式输出。
@@ -625,7 +679,7 @@ def run_emotion_workflow_streaming(
 
             emotion_result, memory_result = await asyncio.gather(
                 asyncio.to_thread(emotion_analysis_node, initial_state),
-                asyncio.to_thread(_run_memory_retrieval, initial_state, memory_manager, mem0_bridge, working_memory_store),
+                asyncio.to_thread(_run_memory_retrieval, initial_state, memory_manager, working_memory_store),
             )
             state = {**initial_state, **emotion_result, **memory_result}
 
@@ -670,6 +724,7 @@ def run_emotion_workflow_streaming(
 
             # 后台异步更新工作记忆和长期记忆，不阻塞响应
             async def _background_save():
+                # 1. 更新工作记忆
                 if working_memory_store:
                     try:
                         update_llm = get_chat_client(temperature=0.0, use_thinking=False)
@@ -677,18 +732,69 @@ def run_emotion_workflow_streaming(
                     except Exception as e:
                         logger.warning(f"[流式工作记忆更新] 失败: {e}")
 
-                if mem0_bridge:
+                # 2. 存储长期记忆（传递情感分析 Agent 的结果）
+                if memory_manager:
                     try:
+                        # 从情感分析 Agent 的结果中提取情感标签
+                        emotion_analysis = state.get("emotion_analysis")
+                        emotion_type = None
+                        emotion_int = None
+                        if emotion_analysis:
+                            try:
+                                emotion_type = EmotionType.from_string(emotion_analysis.get("current_emotion", ""))
+                            except (ValueError, AttributeError):
+                                emotion_type = None
+                            emotion_int = emotion_analysis.get("emotion_intensity")
+                        
                         await asyncio.to_thread(
-                            mem0_bridge.add_to_both,
+                            memory_manager.extract_and_store_facts,
                             state.get("user_id", "default"),
                             state.get("user_message", ""),
                             reply,
                             MemoryCategory.EMOTION,
+                            emotion_type,
+                            emotion_int,
                         )
                         logger.info("💾 [流式记忆存储] 已保存")
                     except Exception as e:
                         logger.warning(f"[流式记忆存储] 失败: {e}")
+
+                # 3. 新增：更新档案卡
+                if profile_manager:
+                    try:
+                        from user_profile import ProfileUpdater
+                        profile_updater = ProfileUpdater(profile_manager)
+                        llm_client = get_chat_client(temperature=0.0, use_thinking=False)
+                        updated_fields = await asyncio.to_thread(
+                            profile_updater.update_from_conversation,
+                            state.get("user_id", "default"),
+                            state.get("user_message", ""),
+                            reply,
+                            llm_client,
+                        )
+                        if updated_fields:
+                            logger.info(f"[档案卡更新] 用户 {state.get('user_id', 'default')}: 更新了 {updated_fields}")
+                    except Exception as e:
+                        logger.warning(f"[档案卡更新] 失败: {e}")
+
+                # 4. 新增：提取时间标签
+                if memory_manager:
+                    try:
+                        from temporal_metadata import TemporalExtractor
+                        user_msg = state.get("user_message", "")
+                        temporal = TemporalExtractor.extract_from_text(user_msg)
+                        if temporal.event_time or temporal.time_context or temporal.recurrence:
+                            user_memories = memory_manager._get_user_memories(state.get("user_id", "default"))
+                            now = time.time()
+                            recent_memories = [m for m in user_memories.values() if now - m.created_at < 10]
+                            for memory in recent_memories:
+                                memory.temporal_data = temporal.to_dict()
+                                memory_manager._dirty.add((state.get("user_id", "default"), memory.id))
+                            if recent_memories:
+                                memory_manager._save_to_disk()
+                                logger.info(f"[时间标签] 为 {len(recent_memories)} 条记忆附加了时间标签")
+                    except Exception as e:
+                        logger.warning(f"[时间标签更新] 失败: {e}")
 
             asyncio.create_task(_background_save())
 
@@ -708,7 +814,6 @@ def run_emotion_workflow_streaming(
 def _run_memory_retrieval(
     state: Dict,
     memory_manager: Optional[MemoryManager],
-    mem0_bridge: Optional[Mem0Bridge],
     working_memory_store: Optional[WorkingMemoryStore] = None,
 ) -> Dict:
     """独立运行记忆检索节点（供流式工作流调用）。"""
@@ -726,10 +831,8 @@ def _run_memory_retrieval(
         logger.info(f"[查询改写] 原始: {user_message[:30]} → {len(queries)} 个查询")
 
     retrieved = []
-    if mem0_bridge:
-        retrieved = mem0_bridge.search_with_enrichment(user_id, user_message, mem0_limit=5, local_limit=5, queries=queries)
-    elif memory_manager:
-        local_results = memory_manager.search_memories(user_id, user_message, limit=5, queries=queries)
+    if memory_manager:
+        local_results = memory_manager.search_memories(user_id, user_message, limit=10, queries=queries)
         retrieved = [{"memory": m.content, "source": "local"} for m in local_results]
 
     memory_texts = [r.get("memory", "") for r in retrieved if r.get("memory")]

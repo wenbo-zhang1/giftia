@@ -30,9 +30,8 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 # ruff: noqa: E402
 from llm_config import get_llm_client
-from model_config import CHAT_MODEL, CHAT_BASE_URL, get_mem0_api_key, get_chat_api_key, detect_provider, PROVIDER_KEY_MAP
-from mem0 import MemoryClient
-from memory_manager import MemoryManager, Mem0Bridge
+from model_config import CHAT_MODEL, CHAT_BASE_URL, get_chat_api_key, detect_provider, PROVIDER_KEY_MAP
+from memory_manager import MemoryManager
 from working_memory import WorkingMemoryStore
 from emotion_graph import build_emotion_graph, run_emotion_workflow_streaming, load_prompt_config, save_prompt_config, get_dialogue_prompt, DIALOGUE_AGENT_PROMPT
 from file_processor import is_multimodal_model
@@ -44,12 +43,7 @@ from conversation_store import ConversationStore
 
 logger = logging.getLogger("server")
 
-MEM0_API_KEY = ""
 CHAT_API_KEY = ""
-try:
-    MEM0_API_KEY = get_mem0_api_key()
-except ValueError:
-    logger.warning("未配置 mem0_API_KEY，记忆功能不可用")
 try:
     CHAT_API_KEY = get_chat_api_key()
 except ValueError:
@@ -140,11 +134,6 @@ def _validate_env_on_startup():
         logger.error(f"未找到 Chat API Key。请在 .env 中设置 {key_name}=your_api_key（当前模型: {CHAT_MODEL}，提供商: {provider}）")
         sys.exit(1)
 
-    if not MEM0_API_KEY:
-        logger.warning("未配置 MEM0_API_KEY，记忆功能将降级为本地模式")
-    else:
-        logger.info("MEM0_API_KEY 已配置，云端记忆功能可用")
-
     embedding_key = os.environ.get("ZHIPU_API_KEY", "") or os.environ.get("ZhipuAI_API_KEY", "")
     if not embedding_key:
         logger.warning("未配置 Embedding API Key，语义检索将降级为关键词匹配")
@@ -160,7 +149,7 @@ def _validate_env_on_startup():
 def _log_startup_summary():
     features = []
     features.append(f"Chat: {CHAT_MODEL} (key: {'已配置' if CHAT_API_KEY else '未配置'})")
-    features.append(f"记忆: {'Mem0 云端' if MEM0_API_KEY else '仅本地'}")
+    features.append(f"记忆: 本地记忆系统")
     features.append(f"多模态: {'支持' if _app_state.get('multimodal') else '不支持'}")
     features.append(f"认证: {'已启用' if GIFTIA_ACCESS_KEY else '未启用'}")
     logger.info("启动配置摘要: " + " | ".join(features))
@@ -175,18 +164,17 @@ async def lifespan(app: FastAPI):
     _app_state["conversation_store"] = ConversationStore()
     _app_state["working_memory_store"] = WorkingMemoryStore()
 
-    mem0_client = None
-    if MEM0_API_KEY:
-        try:
-            mem0_client = MemoryClient(api_key=MEM0_API_KEY)
-            logger.info("Mem0 客户端初始化成功")
-        except Exception as e:
-            logger.warning(f"Mem0 初始化失败: {e}")
+    # 初始化档案卡管理器
+    from user_profile import ProfileManager
+    db_path = os.path.join(os.path.dirname(__file__), "giftia.db")
+    profile_manager = ProfileManager(db_path)
+    _app_state["profile_manager"] = profile_manager
 
-    bridge = Mem0Bridge(memory_manager=mm, mem0_client=mem0_client)
-    _app_state["mem0_bridge"] = bridge
-
-    graph = build_emotion_graph(memory_manager=mm, mem0_bridge=bridge, working_memory_store=_app_state["working_memory_store"])
+    graph = build_emotion_graph(
+        memory_manager=mm,
+        working_memory_store=_app_state["working_memory_store"],
+        profile_manager=profile_manager,
+    )
     _app_state["emotion_graph"] = graph
 
     _app_state["multimodal"] = is_multimodal_model()
@@ -196,6 +184,9 @@ async def lifespan(app: FastAPI):
     _log_startup_summary()
     logger.info("Giftia 后端服务已启动")
     yield
+    
+    # 新增：关闭档案卡管理器
+    profile_manager.close()
     logger.info("Giftia 后端服务已停止")
 
 app = FastAPI(title="Giftia API", version="1.0.0", lifespan=lifespan)
@@ -337,12 +328,12 @@ async def chat(user_id: str, req: ChatRequest):
             reply = ""
             async for chunk in run_emotion_workflow_streaming(
                 memory_manager=_app_state.get("memory_manager"),
-                mem0_bridge=_app_state.get("mem0_bridge"),
                 user_id=user_id,
                 user_message=req.message,
                 conversation_history=req.conversation_history,
                 image_data=req.image_data,
                 working_memory_store=_app_state.get("working_memory_store"),
+                profile_manager=_app_state.get("profile_manager"),
             ):
                 chunk_type = chunk.get("type")
                 if chunk_type == "status":
@@ -519,18 +510,207 @@ async def get_memory_stats(user_id: str):
 @app.delete("/api/memory/{user_id}", dependencies=[Depends(verify_access_key)])
 async def clear_memories(user_id: str):
     user_id = user_id.strip() or DEFAULT_USER_ID
-    bridge: Mem0Bridge = _app_state["mem0_bridge"]
     mm: MemoryManager = _app_state["memory_manager"]
-    try:
-        if bridge.mem0_client:
-            bridge.mem0_client.delete_all(user_id=user_id)
-    except Exception as e:
-        logger.warning(f"清除 Mem0 记忆失败: {e}")
     mm.delete_user_memories(user_id)
     mem_file = os.path.join(os.path.dirname(__file__), "memory_store", f"{user_id}.json")
     if os.path.exists(mem_file):
         os.remove(mem_file)
     return {"ok": True}
+
+# ================================================================
+# API: 用户档案卡
+# ================================================================
+
+@app.get("/api/profile/{user_id}", dependencies=[Depends(verify_access_key)])
+async def get_user_profile(user_id: str):
+    """获取用户档案卡"""
+    from user_profile import UserProfile
+    profile_manager = _app_state["profile_manager"]
+    profile = profile_manager.get_profile(user_id)
+    
+    if not profile:
+        profile = UserProfile(user_id=user_id)
+    
+    return {
+        "user_id": user_id,
+        "profile": profile.to_dict(),
+        "prompt_context": profile.to_prompt_context(),
+        "version": profile.version,
+    }
+
+
+@app.put("/api/profile/{user_id}", dependencies=[Depends(verify_access_key)])
+async def update_user_profile(user_id: str, updates: Dict):
+    """手动更新用户档案卡"""
+    from user_profile import UserProfile
+    profile_manager = _app_state["profile_manager"]
+    profile = profile_manager.get_profile(user_id) or UserProfile(user_id=user_id)
+    
+    for field_name, value in updates.items():
+        if hasattr(profile, field_name):
+            setattr(profile, field_name, value)
+    
+    profile.version += 1
+    profile_manager.save_profile(profile)
+    
+    return {
+        "ok": True,
+        "updated_fields": list(updates.keys()),
+        "version": profile.version,
+    }
+
+# ================================================================
+# API: 记忆分层
+# ================================================================
+
+@app.get("/api/memory/{user_id}/layers", dependencies=[Depends(verify_access_key)])
+async def get_memory_layers(user_id: str):
+    """获取各层级记忆统计"""
+    mm: MemoryManager = _app_state["memory_manager"]
+    
+    stats = {
+        "core": {"count": 0, "sample": []},
+        "important": {"count": 0, "sample": []},
+        "regular": {"count": 0, "sample": []},
+    }
+    
+    user_memories = mm._get_user_memories(user_id)
+    
+    for memory_id, memory in user_memories.items():
+        layer = memory.layer if hasattr(memory, "layer") else 3
+        layer_name = {1: "core", 2: "important", 3: "regular"}[layer]
+        stats[layer_name]["count"] += 1
+        
+        if len(stats[layer_name]["sample"]) < 3:
+            stats[layer_name]["sample"].append({
+                "id": memory_id,
+                "content": memory.content[:50],
+                "importance": memory.importance,
+            })
+    
+    return stats
+
+
+@app.get("/api/memory/{user_id}/detail", dependencies=[Depends(verify_access_key)])
+async def get_memory_detail(user_id: str):
+    """获取用户记忆详情（分层记忆 + 工作记忆）"""
+    mm: MemoryManager = _app_state["memory_manager"]
+    working_memory_store: WorkingMemoryStore = _app_state["working_memory_store"]
+    
+    # 获取所有记忆
+    user_memories = mm._get_user_memories(user_id)
+    
+    # 按层级分组
+    layers = {
+        "core": [],
+        "important": [],
+        "regular": [],
+    }
+    
+    layer_names = {1: "core", 2: "important", 3: "regular"}
+    
+    for memory_id, memory in user_memories.items():
+        layer = memory.layer if hasattr(memory, "layer") else 3
+        layer_name = layer_names.get(layer, "regular")
+        
+        memory_detail = {
+            "id": memory_id,
+            "content": memory.content,
+            "emotion": memory.emotion.value if hasattr(memory.emotion, "value") else str(memory.emotion),
+            "emotion_emoji": memory.emotion.to_emoji() if hasattr(memory.emotion, "to_emoji") else "😐",
+            "emotion_intensity": memory.emotion_intensity,
+            "category": memory.category.value if hasattr(memory.category, "value") else str(memory.category),
+            "importance": memory.importance,
+            "access_count": memory.access_count,
+            "created_at": memory.created_at,
+            "last_accessed": memory.last_accessed,
+            "is_consolidated": memory.is_consolidated,
+            "tags": memory.tags,
+            "temporal_data": memory.temporal_data if hasattr(memory, "temporal_data") else {},
+        }
+        layers[layer_name].append(memory_detail)
+    
+    # 获取工作记忆
+    working_memory = working_memory_store.load(user_id)
+    
+    return {
+        "layers": layers,
+        "working_memory": working_memory,
+    }
+
+
+@app.patch("/api/memory/{user_id}/{memory_id}/layer", dependencies=[Depends(verify_access_key)])
+async def update_memory_layer(user_id: str, memory_id: str, new_layer: int):
+    """手动调整记忆层级"""
+    if new_layer not in [1, 2, 3]:
+        raise HTTPException(status_code=400, detail="无效的层级")
+    
+    mm: MemoryManager = _app_state["memory_manager"]
+    user_memories = mm._get_user_memories(user_id)
+    
+    if memory_id not in user_memories:
+        raise HTTPException(status_code=404, detail="记忆不存在")
+    
+    memory = user_memories[memory_id]
+    memory.layer = new_layer
+    mm._dirty.add((user_id, memory_id))
+    mm._save_to_disk()
+    
+    return {
+        "ok": True,
+        "memory_id": memory_id,
+        "new_layer": new_layer,
+    }
+
+
+@app.get("/api/memory/{user_id}/detail", dependencies=[Depends(verify_access_key)])
+async def get_memory_detail(user_id: str):
+    """返回用户所有记忆的完整信息，按层级分组"""
+    user_id = user_id.strip() or DEFAULT_USER_ID
+    mm: MemoryManager = _app_state["memory_manager"]
+    working_memory_store: WorkingMemoryStore = _app_state.get("working_memory_store")
+
+    layers: Dict[str, list] = {"core": [], "important": [], "regular": []}
+    user_memories = mm._get_user_memories(user_id)
+
+    for mid, m in user_memories.items():
+        layer = m.layer if hasattr(m, "layer") else 3
+        key = {1: "core", 2: "important", 3: "regular"}.get(layer, "regular")
+        layers[key].append({
+            "id": mid,
+            "content": m.content,
+            "emotion": m.emotion.value,
+            "emotion_emoji": m.emotion.to_emoji(),
+            "emotion_intensity": m.emotion_intensity,
+            "category": m.category.value,
+            "importance": m.importance,
+            "access_count": m.access_count,
+            "created_at": m.created_at,
+            "last_accessed": m.last_accessed,
+            "is_consolidated": m.is_consolidated,
+            "tags": m.tags,
+            "temporal_data": m.temporal_data if hasattr(m, "temporal_data") else {},
+        })
+
+    # 按创建时间倒序
+    for key in layers:
+        layers[key].sort(key=lambda x: x["created_at"], reverse=True)
+
+    # 获取工作记忆
+    wm_data = {"summary": "", "open_topics": [], "current_emotion": "neutral", "updated_at": 0}
+    if working_memory_store:
+        wm_data = working_memory_store.load(user_id)
+
+    return {
+        "layers": layers,
+        "working_memory": {
+            "summary": wm_data["summary"],
+            "open_topics": wm_data["open_topics"],
+            "current_emotion": wm_data["current_emotion"],
+            "updated_at": wm_data["updated_at"],
+        }
+    }
+
 
 @app.get("/api/logs", dependencies=[Depends(verify_admin_key)])
 async def get_logs(limit: int = Query(default=200, ge=1, le=500)):
@@ -624,22 +804,6 @@ async def _check_llm_connectivity() -> str:
         return "unreachable"
 
 
-async def _check_mem0_connectivity() -> str:
-    if not MEM0_API_KEY:
-        return "not_configured"
-    bridge: Mem0Bridge = _app_state.get("mem0_bridge")
-    if not bridge or not bridge.mem0_client:
-        return "unreachable"
-    try:
-        await asyncio.wait_for(
-            asyncio.to_thread(bridge.mem0_client.search, query="ping", user_id="health_check", limit=1),
-            timeout=5.0,
-        )
-        return "ok"
-    except Exception:
-        return "unreachable"
-
-
 @app.get("/api/health")
 async def health():
     now = time.time()
@@ -647,13 +811,11 @@ async def health():
         return _health_cache["result"]
 
     llm_status = await _check_llm_connectivity()
-    mem0_status = await _check_mem0_connectivity()
 
     result = {
         "status": "ok",
         "dependencies": {
             "llm": llm_status,
-            "mem0": mem0_status,
         },
         "multimodal": _app_state.get("multimodal", False),
         "auth_required": bool(GIFTIA_ACCESS_KEY),
