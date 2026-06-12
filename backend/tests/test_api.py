@@ -20,8 +20,6 @@ def app():
     }
     _app_state["conversation_store"].load.return_value = (convs, "test-uuid")
     _app_state["conversation_store"].save.return_value = None
-    _app_state["mem0_bridge"] = MagicMock()
-    _app_state["mem0_bridge"].mem0_client = None
     _app_state["multimodal"] = False
     _app_state["working_memory_store"] = MagicMock()
     _app_state["working_memory_store"].format_for_prompt.return_value = ""
@@ -37,17 +35,14 @@ def client(app):
 
 class TestHealthEndpoint:
     def test_health_returns_ok(self, client):
-        with patch("server._check_llm_connectivity", new_callable=AsyncMock) as mock_llm, \
-             patch("server._check_mem0_connectivity", new_callable=AsyncMock) as mock_mem0:
+        with patch("server._check_llm_connectivity", new_callable=AsyncMock) as mock_llm:
             mock_llm.return_value = "ok"
-            mock_mem0.return_value = "not_configured"
             response = client.get("/api/health")
             assert response.status_code == 200
             data = response.json()
             assert data["status"] == "ok"
             assert "dependencies" in data
             assert "llm" in data["dependencies"]
-            assert "mem0" in data["dependencies"]
 
     def test_health_v1_works(self, client):
         response = client.get("/api/v1/health")

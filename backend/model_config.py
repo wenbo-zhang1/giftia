@@ -75,13 +75,7 @@ def get_model_profile(model_name: str) -> dict:
 
 
 # ================================================================
-# Mem0 记忆配置
-# ================================================================
-
-MEM0_ENABLED = True
-
-# ================================================================
-# 嵌入模型（预留，Memo 云端模式下不需要配置）
+# 嵌入模型
 # ================================================================
 
 EMBED_MODEL = "embedding-3"
@@ -147,10 +141,3 @@ def resolve_api_key(provider: str) -> str:
 def get_chat_api_key() -> str:
     provider = detect_provider()
     return resolve_api_key(provider)
-
-
-def get_mem0_api_key() -> str:
-    api_key = os.environ.get("MEM0_API_KEY", "") or os.environ.get("mem0_API_KEY", "")
-    if not api_key:
-        raise ValueError("未找到 MEM0_API_KEY，请在 .env 文件中设置 MEM0_API_KEY=your_key")
-    return api_key
