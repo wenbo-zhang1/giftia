@@ -7,4 +7,4 @@ python-multipart>=0.0.6
 sse-starlette>=1.8.0
 python-dotenv>=1.0.0
 Pillow>=10.0.0
-numpy>=1.24.0
+numpy>=2.4.6
