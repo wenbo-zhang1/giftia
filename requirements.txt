@@ -1,7 +1,7 @@
 langchain-openai>=0.1.0
 langchain-core>=0.1.0
 langgraph>=0.0.20
-fastapi>=0.104.0
+fastapi>=0.137.0
 uvicorn>=0.24.0
 python-multipart>=0.0.6
 sse-starlette>=1.8.0
